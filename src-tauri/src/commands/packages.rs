@@ -4,13 +4,16 @@ use crate::{
         AnalyzeMobilePackageRequest, AndroidPackageExport, ApiError, ApiResult,
         ExportAndroidPackageRequest, ExportedAndroidFile, InstallMobilePackageRequest,
         InstalledApp, MobilePackageAnalysis, MobilePlatform, OperationResult, PackageIcon,
+        PackageProtectionAnalysis, PackageProtectionCategory, PackageProtectionConfidence,
+        PackageProtectionFinding, PackageProtectionStatus,
     },
-    runner::{resolve_tool, run_checked, run_process},
-    validation,
+    runner::{resolve_tool, run_checked, run_process, run_process_at_with_env, ProcessOutput},
+    toolchain, validation,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use md5::{Digest, Md5};
 use plist::Value as PlistValue;
+use serde_json::Value as JsonValue;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -29,6 +32,11 @@ const MAX_ARCHIVE_ENTRIES: usize = 50_000;
 const MAX_CENTRAL_DIRECTORY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PLIST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ICON_BYTES: u64 = 8 * 1024 * 1024;
+const PROTECTION_ENGINE: &str = "Detect It Easy";
+const PROTECTION_ENGINE_VERSION: &str = "3.21";
+const MAX_PROTECTION_TEXT_CHARS: usize = 320;
+const MAX_PROTECTION_EVIDENCE: usize = 8;
+const MAX_DIE_JSON_DEPTH: usize = 32;
 
 #[derive(Default)]
 struct PackageMetadata {
@@ -241,15 +249,14 @@ pub(crate) fn analyze_package(value: &str) -> Result<MobilePackageAnalysis, ApiE
             ))
         }
     };
-    let md5 = stream_md5(&path)?;
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("package")
         .to_string();
     match platform {
-        MobilePlatform::Android => analyze_apk(path, file_name, metadata.len(), md5),
-        MobilePlatform::Ios => analyze_ipa(path, file_name, metadata.len(), md5),
+        MobilePlatform::Android => analyze_apk(path, file_name, metadata.len()),
+        MobilePlatform::Ios => analyze_ipa(path, file_name, metadata.len()),
     }
 }
 
@@ -257,9 +264,9 @@ fn analyze_apk(
     path: PathBuf,
     file_name: String,
     file_size: u64,
-    md5: String,
 ) -> Result<MobilePackageAnalysis, ApiError> {
-    ensure_zip(&path)?;
+    let scanned_entries = ensure_zip(&path)?;
+    let md5 = stream_md5(&path)?;
     let mut warnings = Vec::new();
     let mut metadata = PackageMetadata::default();
     let path_arg = path.to_string_lossy().into_owned();
@@ -335,6 +342,7 @@ fn analyze_apk(
         None,
         &mut warnings,
     )?;
+    let protection = analyze_apk_protection(&path, Some(scanned_entries));
     let fallback_used = source != "aapt2";
     Ok(MobilePackageAnalysis {
         platform: MobilePlatform::Android,
@@ -354,6 +362,7 @@ fn analyze_apk(
         permissions: metadata.permissions.into_iter().collect(),
         usage_descriptions: BTreeMap::new(),
         icon,
+        protection: Some(protection),
         warnings,
     })
 }
@@ -362,7 +371,6 @@ fn analyze_ipa(
     path: PathBuf,
     file_name: String,
     file_size: u64,
-    md5: String,
 ) -> Result<MobilePackageAnalysis, ApiError> {
     let mut archive = open_safe_zip(&path, "invalid_ipa")?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
@@ -371,6 +379,7 @@ fn analyze_ipa(
             "IPA contains too many ZIP entries",
         ));
     }
+    let md5 = stream_md5(&path)?;
     let mut plist_indices = Vec::new();
     for index in 0..archive.len() {
         if archive
@@ -503,8 +512,451 @@ fn analyze_ipa(
         permissions: permissions.into_iter().collect(),
         usage_descriptions,
         icon,
+        protection: None,
         warnings,
     })
+}
+
+fn analyze_apk_protection(path: &Path, scanned_entries: Option<u64>) -> PackageProtectionAnalysis {
+    let executable = match toolchain::resolve_bundled_tool("diec") {
+        Ok(executable) => executable,
+        Err(_) => {
+            return protection_inconclusive(
+                scanned_entries,
+                "The bundled Detect It Easy engine is unavailable",
+            )
+        }
+    };
+    let database = match toolchain::validate_bundled_die_database(&executable.path) {
+        Ok(database) => database,
+        Err(error) => return protection_inconclusive(scanned_entries, error.message),
+    };
+    let args = vec![
+        "-D".into(),
+        database.to_string_lossy().into_owned(),
+        "--json".into(),
+        "--deepscan".into(),
+        "--heuristicscan".into(),
+        path.to_string_lossy().into_owned(),
+    ];
+    let environment = toolchain::bundled_tool_environment("diec", &executable.path);
+    classify_die_process(
+        run_process_at_with_env(
+            "diec",
+            &executable.path,
+            &args,
+            ANALYZER_TIMEOUT,
+            &[],
+            &environment,
+        ),
+        scanned_entries,
+    )
+}
+
+fn classify_die_process(
+    output: Result<ProcessOutput, ApiError>,
+    scanned_entries: Option<u64>,
+) -> PackageProtectionAnalysis {
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            return protection_inconclusive(
+                scanned_entries,
+                format!(
+                    "Detect It Easy could not be started: {}",
+                    compact_protection_text(&error.message)
+                ),
+            )
+        }
+    };
+    if output.timed_out {
+        return protection_inconclusive(
+            scanned_entries,
+            "Detect It Easy did not finish within 25 seconds",
+        );
+    }
+    if output.truncated {
+        return protection_inconclusive(
+            scanned_entries,
+            "Detect It Easy output exceeded the capture limit, so the result is incomplete",
+        );
+    }
+    if output.exit_code != Some(0) {
+        let detail = if output.stderr.trim().is_empty() {
+            compact_protection_text(&output.stdout)
+        } else {
+            compact_protection_text(&output.stderr)
+        };
+        let warning = if detail.is_empty() {
+            format!("Detect It Easy exited with status {:?}", output.exit_code)
+        } else {
+            format!(
+                "Detect It Easy exited with status {:?}: {detail}",
+                output.exit_code
+            )
+        };
+        return protection_inconclusive(scanned_entries, warning);
+    }
+
+    let findings = match parse_die_findings(&output.stdout) {
+        Ok(findings) => findings,
+        Err(warning) => return protection_inconclusive(scanned_entries, warning),
+    };
+    let stderr = compact_protection_text(&output.stderr);
+    if findings.is_empty() && !stderr.is_empty() {
+        return protection_inconclusive(
+            scanned_entries,
+            format!("Detect It Easy reported a diagnostic: {stderr}"),
+        );
+    }
+    PackageProtectionAnalysis {
+        status: if findings.is_empty() {
+            PackageProtectionStatus::NotDetected
+        } else {
+            PackageProtectionStatus::Detected
+        },
+        engine: PROTECTION_ENGINE.into(),
+        engine_version: Some(PROTECTION_ENGINE_VERSION.into()),
+        findings,
+        scanned_entries,
+        warnings: if stderr.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!("Detect It Easy reported a diagnostic: {stderr}")]
+        },
+    }
+}
+
+fn protection_inconclusive(
+    scanned_entries: Option<u64>,
+    warning: impl Into<String>,
+) -> PackageProtectionAnalysis {
+    PackageProtectionAnalysis {
+        status: PackageProtectionStatus::Inconclusive,
+        engine: PROTECTION_ENGINE.into(),
+        engine_version: Some(PROTECTION_ENGINE_VERSION.into()),
+        findings: Vec::new(),
+        scanned_entries,
+        warnings: vec![warning.into()],
+    }
+}
+
+fn parse_die_findings(stdout: &str) -> Result<Vec<PackageProtectionFinding>, String> {
+    let document = stdout.trim();
+    let document = document
+        .strip_prefix('\u{feff}')
+        .unwrap_or(document)
+        .trim_start();
+    if document.is_empty() {
+        return Err("Detect It Easy returned no JSON result".into());
+    }
+    let document: JsonValue = serde_json::from_str(document)
+        .map_err(|_| "Detect It Easy returned incomplete or invalid JSON".to_string())?;
+    let detects = document
+        .as_object()
+        .and_then(|root| root.get("detects"))
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| {
+            "Detect It Easy returned an unrecognized top-level JSON result".to_string()
+        })?;
+    let apk_context_seen = detects.iter().any(|detect| {
+        let Some(detect) = detect.as_object() else {
+            return false;
+        };
+        detect
+            .get("filetype")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|file_type| file_type.eq_ignore_ascii_case("APK"))
+            && detect.get("values").is_some_and(JsonValue::is_array)
+    });
+    if !apk_context_seen {
+        return Err(
+            "Detect It Easy did not return a complete APK scan context; the result cannot be treated as a negative"
+                .into(),
+        );
+    }
+    let mut findings = BTreeMap::new();
+    let mut schema_seen = false;
+    let mut depth_exceeded = false;
+    collect_die_findings(
+        &document,
+        0,
+        None,
+        &mut schema_seen,
+        &mut depth_exceeded,
+        &mut findings,
+    );
+    if depth_exceeded {
+        return Err("Detect It Easy JSON exceeded the supported nesting limit".into());
+    }
+    if !schema_seen {
+        return Err("Detect It Easy returned an unrecognized JSON result".into());
+    }
+    Ok(findings.into_values().collect())
+}
+
+fn collect_die_findings(
+    value: &JsonValue,
+    depth: usize,
+    inherited_file_type: Option<&str>,
+    schema_seen: &mut bool,
+    depth_exceeded: &mut bool,
+    findings: &mut BTreeMap<String, PackageProtectionFinding>,
+) {
+    if depth > MAX_DIE_JSON_DEPTH {
+        *depth_exceeded = true;
+        return;
+    }
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                collect_die_findings(
+                    value,
+                    depth + 1,
+                    inherited_file_type,
+                    schema_seen,
+                    depth_exceeded,
+                    findings,
+                );
+            }
+        }
+        JsonValue::Object(values) => {
+            if values.get("detects").is_some_and(JsonValue::is_array)
+                || values.get("values").is_some_and(JsonValue::is_array)
+            {
+                *schema_seen = true;
+            }
+            let file_type = values
+                .get("filetype")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or(inherited_file_type);
+            if let (Some(category), Some(raw_name)) = (
+                values
+                    .get("type")
+                    .and_then(JsonValue::as_str)
+                    .and_then(protection_category),
+                values
+                    .get("name")
+                    .and_then(JsonValue::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+            ) {
+                *schema_seen = true;
+                let (family, name, vendor) = protection_identity(raw_name);
+                let id = format!("die:{}:{family}", protection_category_name(category));
+                let mut evidence = Vec::new();
+                push_protection_evidence(
+                    &mut evidence,
+                    format!("Detect It Easy signature: {raw_name}"),
+                );
+                if let Some(value) = file_type {
+                    push_protection_evidence(&mut evidence, format!("File type: {value}"));
+                }
+                for (key, prefix) in [("version", "Version"), ("info", "Details")] {
+                    if let Some(value) = values.get(key).and_then(JsonValue::as_str) {
+                        if !value.trim().is_empty() {
+                            push_protection_evidence(&mut evidence, format!("{prefix}: {value}"));
+                        }
+                    }
+                }
+                if let Some(value) = values.get("string").and_then(JsonValue::as_str) {
+                    push_protection_evidence(&mut evidence, value.to_string());
+                }
+                let uncertainty_text = evidence.join(" ").to_ascii_lowercase();
+                let uncertain = uncertainty_text.contains("(heur)")
+                    || uncertainty_text.contains("heuristic")
+                    || uncertainty_text.contains("possible")
+                    || uncertainty_text.contains("probably");
+                let confidence = if uncertain {
+                    PackageProtectionConfidence::Low
+                } else if category == PackageProtectionCategory::Obfuscator {
+                    PackageProtectionConfidence::Medium
+                } else {
+                    PackageProtectionConfidence::High
+                };
+                if let Some(existing) = findings.get_mut(&id) {
+                    for item in evidence {
+                        push_protection_evidence(&mut existing.evidence, item);
+                    }
+                    if confidence_rank(confidence) > confidence_rank(existing.confidence) {
+                        existing.confidence = confidence;
+                    }
+                } else {
+                    findings.insert(
+                        id.clone(),
+                        PackageProtectionFinding {
+                            id,
+                            name,
+                            vendor,
+                            category,
+                            confidence,
+                            evidence,
+                        },
+                    );
+                }
+            }
+            for value in values.values() {
+                collect_die_findings(
+                    value,
+                    depth + 1,
+                    file_type,
+                    schema_seen,
+                    depth_exceeded,
+                    findings,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn protection_category(value: &str) -> Option<PackageProtectionCategory> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "packer" => Some(PackageProtectionCategory::Packer),
+        "protector" | "protection" => Some(PackageProtectionCategory::Protector),
+        "obfuscator" | "obfuscation" => Some(PackageProtectionCategory::Obfuscator),
+        _ => None,
+    }
+}
+
+fn protection_category_name(category: PackageProtectionCategory) -> &'static str {
+    match category {
+        PackageProtectionCategory::Packer => "packer",
+        PackageProtectionCategory::Protector => "protector",
+        PackageProtectionCategory::Obfuscator => "obfuscator",
+    }
+}
+
+fn protection_identity(raw_name: &str) -> (String, String, Option<String>) {
+    let normalized = raw_name
+        .chars()
+        .filter(|value| value.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let known = if normalized.contains("qihoo360")
+        || normalized == "jiagu"
+        || normalized.contains("360jiagu")
+    {
+        Some(("360-jiagu", "360 加固", "奇虎 360"))
+    } else if normalized.contains("tencentlegu") || normalized == "legu" {
+        Some(("tencent-legu", "腾讯乐固", "腾讯"))
+    } else if normalized.contains("tencent") {
+        Some(("tencent-protection", "腾讯应用加固", "腾讯"))
+    } else if normalized.contains("alibaba") {
+        Some(("alibaba-protection", "阿里聚安全", "阿里巴巴"))
+    } else if normalized.contains("baidu") {
+        Some(("baidu-protection", "百度应用加固", "百度"))
+    } else if normalized.contains("bangcle")
+        || normalized.contains("bangbang")
+        || normalized.contains("secneo")
+        || normalized.contains("secshell")
+    {
+        Some(("bangcle", "梆梆安全加固", "梆梆安全"))
+    } else if normalized.contains("ijiami") || normalized.contains("icrypt") {
+        Some(("ijiami", "爱加密", "爱加密"))
+    } else if normalized.contains("yidun") || normalized.contains("netease") {
+        Some(("netease-yidun", "网易易盾", "网易"))
+    } else if normalized.contains("dexprotector") {
+        Some(("dexprotector", "DexProtector", "Licel"))
+    } else if normalized.contains("virbox") {
+        Some(("virbox", "Virbox Protector", "Virbox"))
+    } else if normalized.contains("liapp") {
+        Some(("liapp", "LIAPP", "LOCKINCOMP"))
+    } else if normalized.contains("appguard") {
+        Some(("appguard", "AppGuard", "AppGuard"))
+    } else if normalized.contains("appsolid") {
+        Some(("appsolid", "AppSolid", "AppSolid"))
+    } else if normalized.contains("dingxiang") || normalized.contains("dxshield") {
+        Some(("dingxiang", "顶象加固", "DingXiang"))
+    } else if normalized.contains("tongfu") {
+        Some(("tongfu", "通付盾", "Tongfu"))
+    } else {
+        None
+    };
+    if let Some((family, name, vendor)) = known {
+        return (family.into(), name.into(), Some(vendor.into()));
+    }
+    let family = slug_protection_name(raw_name);
+    let name = compact_protection_text(raw_name);
+    (
+        if family.is_empty() {
+            format!("unknown-{:016x}", stable_protection_hash(raw_name))
+        } else {
+            family
+        },
+        if name.is_empty() {
+            "Unknown protection".into()
+        } else {
+            name
+        },
+        None,
+    )
+}
+
+fn slug_protection_name(value: &str) -> String {
+    let mut slug = String::new();
+    let mut separator = false;
+    for value in value.chars().flat_map(char::to_lowercase) {
+        if value.is_ascii_alphanumeric() {
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push(value);
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    slug.trim_end_matches('-').to_string()
+}
+
+fn stable_protection_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn push_protection_evidence(evidence: &mut Vec<String>, value: String) {
+    if evidence.len() >= MAX_PROTECTION_EVIDENCE {
+        return;
+    }
+    let value = compact_protection_text(&value);
+    if !value.is_empty() && !evidence.contains(&value) {
+        evidence.push(value);
+    }
+}
+
+fn compact_protection_text(value: &str) -> String {
+    let mut text = String::new();
+    let mut space_pending = false;
+    for value in value.chars() {
+        if value.is_whitespace() || value.is_control() {
+            space_pending = !text.is_empty();
+            continue;
+        }
+        if space_pending && text.chars().count() < MAX_PROTECTION_TEXT_CHARS {
+            text.push(' ');
+        }
+        space_pending = false;
+        if text.chars().count() >= MAX_PROTECTION_TEXT_CHARS {
+            break;
+        }
+        text.push(value);
+    }
+    text
+}
+
+fn confidence_rank(value: PackageProtectionConfidence) -> u8 {
+    match value {
+        PackageProtectionConfidence::Low => 0,
+        PackageProtectionConfidence::Medium => 1,
+        PackageProtectionConfidence::High => 2,
+    }
 }
 
 fn stream_md5(path: &Path) -> Result<String, ApiError> {
@@ -522,7 +974,7 @@ fn stream_md5(path: &Path) -> Result<String, ApiError> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
-fn ensure_zip(path: &Path) -> Result<(), ApiError> {
+fn ensure_zip(path: &Path) -> Result<u64, ApiError> {
     let archive = open_safe_zip(path, "invalid_apk")?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(ApiError::new(
@@ -530,7 +982,7 @@ fn ensure_zip(path: &Path) -> Result<(), ApiError> {
             "Package contains too many ZIP entries",
         ));
     }
-    Ok(())
+    Ok(archive.len() as u64)
 }
 
 fn open_safe_zip(path: &Path, error_code: &str) -> Result<ZipArchive<File>, ApiError> {
@@ -706,7 +1158,7 @@ fn parse_aapt_badging(output: &str, metadata: &mut PackageMetadata) {
             if let Some(icon) = quoted_attr(line, "icon") {
                 metadata.icon_hints.push(icon);
             }
-        } else if line.starts_with("sdkVersion:") {
+        } else if line.starts_with("sdkVersion:") || line.starts_with("minSdkVersion:") {
             metadata.minimum_os_version = line
                 .split_once(':')
                 .map(|(_, value)| value.trim_matches('\'').to_string());
@@ -1357,17 +1809,173 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn successful_die_output(stdout: &str) -> ProcessOutput {
+        ProcessOutput {
+            program: "diec".into(),
+            exit_code: Some(0),
+            stdout: stdout.into(),
+            stderr: String::new(),
+            timed_out: false,
+            truncated: false,
+            duration_ms: 12,
+        }
+    }
+
     #[test]
     fn parses_aapt_metadata() {
         let mut metadata = PackageMetadata::default();
         parse_aapt_badging(
-            "package: name='dev.mobius.demo' versionCode='42' versionName='1.2'\nuses-permission:'android.permission.CAMERA'\napplication: label='Demo' icon='res/mipmap-xxxhdpi/ic_launcher.png'",
+            "package: name='dev.mobius.demo' versionCode='42' versionName='1.2'\nuses-permission:'android.permission.CAMERA'\nminSdkVersion:'23'\ntargetSdkVersion:'35'\napplication: label='Demo' icon='res/mipmap-xxxhdpi/ic_launcher.png'",
             &mut metadata,
         );
         assert_eq!(metadata.package_name.as_deref(), Some("dev.mobius.demo"));
         assert_eq!(metadata.display_name.as_deref(), Some("Demo"));
         assert!(metadata.permissions.contains("android.permission.CAMERA"));
+        assert_eq!(metadata.minimum_os_version.as_deref(), Some("23"));
+        assert_eq!(metadata.target_sdk_version.as_deref(), Some("35"));
         assert_eq!(metadata.icon_hints.len(), 1);
+    }
+
+    #[test]
+    fn parses_only_relevant_die_findings_and_merges_aliases() {
+        let findings = parse_die_findings(
+            r#"{
+              "detects": [
+                {
+                  "filetype": "APK",
+                  "values": [
+                    {"type":"Protector","name":"TencentLegu","version":"5","info":"shell","string":"Protector: TencentLegu(5) [shell]"},
+                    {"type":"Compiler","name":"Android SDK","string":"Compiler: Android SDK"}
+                  ]
+                },
+                {
+                  "filetype": "DEX",
+                  "values": [
+                    {"type":"Protector","name":"TencentLegu","info":"classes.dex"},
+                    {"type":"Obfuscator","name":"DexGuard","string":"(Heur) Obfuscator: DexGuard"}
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .expect("valid Detect It Easy JSON");
+
+        assert_eq!(findings.len(), 2);
+        let legu = findings
+            .iter()
+            .find(|finding| finding.id == "die:protector:tencent-legu")
+            .expect("Tencent Legu finding");
+        assert_eq!(legu.name, "腾讯乐固");
+        assert_eq!(legu.vendor.as_deref(), Some("腾讯"));
+        assert_eq!(legu.confidence, PackageProtectionConfidence::High);
+        assert!(legu.evidence.iter().any(|value| value.contains("APK")));
+        assert!(legu.evidence.iter().any(|value| value.contains("DEX")));
+
+        let obfuscator = findings
+            .iter()
+            .find(|finding| finding.name == "DexGuard")
+            .expect("obfuscator finding");
+        assert_eq!(obfuscator.category, PackageProtectionCategory::Obfuscator);
+        assert_eq!(obfuscator.confidence, PackageProtectionConfidence::Low);
+    }
+
+    #[test]
+    fn maps_common_android_protection_product_names() {
+        for (raw, expected_name, expected_vendor) in [
+            ("Qihoo360Protection", "360 加固", "奇虎 360"),
+            ("Legu", "腾讯乐固", "腾讯"),
+            ("TencentSecurity", "腾讯应用加固", "腾讯"),
+            ("AlibabaProtection", "阿里聚安全", "阿里巴巴"),
+            ("BaiduProtection", "百度应用加固", "百度"),
+            ("SecNeo", "梆梆安全加固", "梆梆安全"),
+            ("BangBangReinforcement", "梆梆安全加固", "梆梆安全"),
+            ("Ijiami", "爱加密", "爱加密"),
+            ("NetEaseYiDun", "网易易盾", "网易"),
+            ("DexProtector", "DexProtector", "Licel"),
+            ("Virbox", "Virbox Protector", "Virbox"),
+            ("LIAPP", "LIAPP", "LOCKINCOMP"),
+            ("AppGuard", "AppGuard", "AppGuard"),
+            ("DXShield", "顶象加固", "DingXiang"),
+        ] {
+            let (_, name, vendor) = protection_identity(raw);
+            assert_eq!(name, expected_name, "mapping for {raw}");
+            assert_eq!(
+                vendor.as_deref(),
+                Some(expected_vendor),
+                "mapping for {raw}"
+            );
+        }
+
+        let (_, name, vendor) = protection_identity("FutureProtector");
+        assert_eq!(name, "FutureProtector");
+        assert_eq!(vendor, None);
+    }
+
+    #[test]
+    fn classifies_complete_die_json_as_detected_or_not_detected() {
+        let detected = classify_die_process(
+            Ok(successful_die_output(
+                r#"{"detects":[{"filetype":"APK","values":[]},{"filetype":"DEX","values":[{"type":"Packer","name":"BangcleProtection"}]}]}"#,
+            )),
+            Some(27),
+        );
+        assert_eq!(detected.status, PackageProtectionStatus::Detected);
+        assert_eq!(detected.scanned_entries, Some(27));
+        assert_eq!(detected.findings.len(), 1);
+
+        let not_detected = classify_die_process(
+            Ok(successful_die_output(
+                r#"{"detects":[{"filetype":"APK","values":[{"type":"Package","name":"dev.mobius.demo"}]}]}"#,
+            )),
+            Some(8),
+        );
+        assert_eq!(not_detected.status, PackageProtectionStatus::NotDetected);
+        assert!(not_detected.findings.is_empty());
+        let serialized = serde_json::to_value(not_detected).expect("serialize protection result");
+        assert_eq!(serialized["status"], "notDetected");
+        assert_eq!(serialized["engineVersion"], "3.21");
+        assert_eq!(serialized["scannedEntries"], 8);
+    }
+
+    #[test]
+    fn classifies_unreliable_die_results_as_inconclusive() {
+        let mut timed_out = successful_die_output(r#"{"detects":[]}"#);
+        timed_out.timed_out = true;
+        let mut truncated = successful_die_output(r#"{"detects":[]}"#);
+        truncated.truncated = true;
+        let mut failed = successful_die_output(r#"{"detects":[]}"#);
+        failed.exit_code = Some(2);
+        failed.stderr = "database error".into();
+        let mut diagnostic_without_hit = successful_die_output(r#"{"detects":[]}"#);
+        diagnostic_without_hit.stderr = "signature database could not be opened".into();
+        let ordinary_zip = successful_die_output(
+            r#"{"detects":[{"filetype":"ZIP","values":[{"type":"Unknown","name":"Unknown"}]}]}"#,
+        );
+        let deeply_nested = format!(
+            "{}{{\"detects\":[]}}{}",
+            "[".repeat(MAX_DIE_JSON_DEPTH + 2),
+            "]".repeat(MAX_DIE_JSON_DEPTH + 2)
+        );
+
+        let cases = [
+            classify_die_process(
+                Err(ApiError::new("process_spawn_failed", "cannot execute diec")),
+                None,
+            ),
+            classify_die_process(Ok(timed_out), None),
+            classify_die_process(Ok(truncated), None),
+            classify_die_process(Ok(failed), None),
+            classify_die_process(Ok(successful_die_output("{broken")), None),
+            classify_die_process(Ok(successful_die_output("{}")), None),
+            classify_die_process(Ok(ordinary_zip), None),
+            classify_die_process(Ok(diagnostic_without_hit), None),
+            classify_die_process(Ok(successful_die_output(&deeply_nested)), None),
+        ];
+        for result in cases {
+            assert_eq!(result.status, PackageProtectionStatus::Inconclusive);
+            assert!(result.findings.is_empty());
+            assert!(!result.warnings.is_empty());
+        }
     }
 
     #[test]
@@ -1526,6 +2134,7 @@ mod tests {
     #[test]
     #[ignore = "requires a user-selected real APK available on the local test host"]
     fn live_real_apk_analysis_extracts_core_metadata() {
+        toolchain::initialize(None, None);
         let path = std::env::var("MOBIUS_LIVE_APK_PATH")
             .expect("set MOBIUS_LIVE_APK_PATH to the selected APK");
         let analysis = analyze_package(&path).expect("analyze the real APK");
@@ -1541,5 +2150,11 @@ mod tests {
             .display_name
             .as_deref()
             .is_some_and(|value| !value.is_empty()));
+        let protection = analysis
+            .protection
+            .expect("Android package analysis should include protection status");
+        assert_ne!(protection.status, PackageProtectionStatus::Inconclusive);
+        assert_eq!(protection.engine, PROTECTION_ENGINE);
+        assert_eq!(protection.engine_version.as_deref(), Some("3.21"));
     }
 }

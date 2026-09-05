@@ -71,7 +71,14 @@ def checked_artifact(component: str, value: dict[str, Any]) -> dict[str, Any]:
         raise BundleError(f"{component}: invalid locked archive size")
     if not re.fullmatch(r"[0-9a-f]{64}", str(value["sha256"])):
         raise BundleError(f"{component}: invalid locked SHA-256")
-    if value["archive"] not in {"zip", "tar.gz", "tar.xz", "tar.bz2"}:
+    if value["archive"] not in {
+        "zip",
+        "tar.gz",
+        "tar.xz",
+        "tar.bz2",
+        "pkg",
+        "deb",
+    }:
         raise BundleError(f"{component}: unsupported archive type {value['archive']}")
     return value
 
@@ -140,6 +147,8 @@ def download_locked(
 
 def safe_relative_path(raw_name: str) -> PurePosixPath:
     normalized = raw_name.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
     candidate = PurePosixPath(normalized)
     if (
         not normalized
@@ -152,14 +161,29 @@ def safe_relative_path(raw_name: str) -> PurePosixPath:
     return candidate
 
 
-def safe_extract_zip(archive: Path, destination: Path) -> None:
+def safe_extract_zip(
+    archive: Path, destination: Path, *, skip_internal_links: bool = False
+) -> None:
     total = 0
     with zipfile.ZipFile(archive) as source:
         for member in source.infolist():
             relative = safe_relative_path(member.filename.rstrip("/"))
             unix_mode = member.external_attr >> 16
             if stat.S_ISLNK(unix_mode):
-                raise BundleError(f"Archive contains a symlink: {member.filename}")
+                if not skip_internal_links:
+                    raise BundleError(f"Archive contains a symlink: {member.filename}")
+                with source.open(member) as link_stream:
+                    try:
+                        link = PurePosixPath(
+                            link_stream.read(4096).decode("utf-8").replace("\\", "/")
+                        )
+                    except UnicodeDecodeError as error:
+                        raise BundleError(
+                            f"Archive contains an invalid link: {member.filename}"
+                        ) from error
+                if link.is_absolute() or ".." in link.parts:
+                    raise BundleError(f"Archive contains an unsafe link: {member.filename}")
+                continue
             if member.file_size > MAX_MEMBER_BYTES:
                 raise BundleError(f"Archive member is too large: {member.filename}")
             total += member.file_size
@@ -176,7 +200,13 @@ def safe_extract_zip(archive: Path, destination: Path) -> None:
                 output.chmod(0o755)
 
 
-def safe_extract_tar(archive: Path, destination: Path, archive_type: str) -> None:
+def safe_extract_tar(
+    archive: Path,
+    destination: Path,
+    archive_type: str,
+    *,
+    skip_internal_links: bool = False,
+) -> None:
     modes = {"tar.gz": "r:gz", "tar.xz": "r:xz", "tar.bz2": "r:bz2"}
     try:
         mode = modes[archive_type]
@@ -186,8 +216,15 @@ def safe_extract_tar(archive: Path, destination: Path, archive_type: str) -> Non
     with tarfile.open(archive, mode) as source:
         for member in source:
             relative = safe_relative_path(member.name.rstrip("/"))
-            if member.issym() or member.islnk() or member.isdev():
-                raise BundleError(f"Archive contains a link or device: {member.name}")
+            if member.issym() or member.islnk():
+                if not skip_internal_links:
+                    raise BundleError(f"Archive contains a link: {member.name}")
+                link = PurePosixPath(member.linkname.replace("\\", "/"))
+                if link.is_absolute() or ".." in link.parts:
+                    raise BundleError(f"Archive contains an unsafe link: {member.name}")
+                continue
+            if member.isdev():
+                raise BundleError(f"Archive contains a device: {member.name}")
             if not member.isdir() and not member.isfile():
                 raise BundleError(f"Archive contains an unsupported member: {member.name}")
             if member.size > MAX_MEMBER_BYTES:
@@ -208,6 +245,136 @@ def safe_extract_tar(archive: Path, destination: Path, archive_type: str) -> Non
             output.chmod(0o755 if member.mode & 0o111 else 0o644)
 
 
+def validate_expanded_tree(destination: Path, allow_internal_symlinks: bool) -> None:
+    """Validate a tree produced by a native, hash-locked package extractor."""
+    root = destination.resolve()
+    total = 0
+    for current, directory_names, file_names in os.walk(
+        destination, topdown=True, followlinks=False
+    ):
+        current_path = Path(current)
+        for name in [*directory_names, *file_names]:
+            path = current_path / name
+            safe_relative_path(path.relative_to(destination).as_posix())
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                if not allow_internal_symlinks:
+                    raise BundleError(f"Expanded package contains a link: {path}")
+                raw_target = os.readlink(path)
+                if Path(raw_target).is_absolute():
+                    raise BundleError(f"Expanded package contains an absolute link: {path}")
+                try:
+                    resolved = path.resolve(strict=True)
+                except (OSError, RuntimeError) as error:
+                    raise BundleError(f"Expanded package contains an invalid link: {path}") from error
+                if os.path.commonpath((str(root), str(resolved))) != str(root):
+                    raise BundleError(f"Expanded package link escapes its root: {path}")
+                continue
+            if stat.S_ISDIR(metadata.st_mode):
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise BundleError(f"Expanded package contains a device or special file: {path}")
+            if metadata.st_size > MAX_MEMBER_BYTES:
+                raise BundleError(f"Expanded package member is too large: {path}")
+            total += metadata.st_size
+            if total > MAX_EXTRACTED_BYTES:
+                raise BundleError("Expanded package exceeds the configured safety limit")
+
+
+def safe_extract_pkg(archive: Path, destination: Path) -> None:
+    if platform.system().lower() != "darwin":
+        raise BundleError("Apple .pkg extraction requires a native macOS runner")
+    xar = Path("/usr/bin/xar")
+    pkgutil = Path("/usr/sbin/pkgutil")
+    if not xar.is_file() or not pkgutil.is_file():
+        raise BundleError("Required macOS package extraction tools are unavailable")
+    listing = subprocess.run(
+        [str(xar), "-tf", str(archive)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
+    if listing.returncode != 0 or len(listing.stdout) > 8 * 1024 * 1024:
+        raise BundleError(f"Unable to inspect locked macOS package: {listing.stderr[:1000]}")
+    for member_name in listing.stdout.splitlines():
+        safe_relative_path(member_name.rstrip("/"))
+    expanded = destination / "pkg"
+    result = subprocess.run(
+        [str(pkgutil), "--expand-full", str(archive), str(expanded)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+        check=False,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        raise BundleError(f"Unable to expand locked macOS package: {result.stderr[:1000]}")
+    validate_expanded_tree(expanded, allow_internal_symlinks=True)
+
+
+def safe_extract_deb(
+    archive: Path, destination: Path, artifact: dict[str, Any]
+) -> None:
+    expected = artifact.get("dataMember")
+    if not isinstance(expected, dict) or expected.get("name") != "data.tar.xz":
+        raise BundleError("Debian package is missing its locked data member")
+    expected_size = expected.get("size")
+    expected_hash = expected.get("sha256")
+    if not isinstance(expected_size, int) or not re.fullmatch(
+        r"[0-9a-f]{64}", str(expected_hash)
+    ):
+        raise BundleError("Debian package has an invalid data member lock")
+    payload: bytes | None = None
+    with archive.open("rb") as stream:
+        if stream.read(8) != b"!<arch>\n":
+            raise BundleError("Invalid Debian ar archive header")
+        while True:
+            header = stream.read(60)
+            if not header:
+                break
+            if len(header) != 60 or header[58:] != b"`\n":
+                raise BundleError("Invalid Debian ar member header")
+            try:
+                name = header[:16].decode("ascii").strip().rstrip("/")
+                size = int(header[48:58].decode("ascii").strip())
+            except (UnicodeDecodeError, ValueError) as error:
+                raise BundleError("Invalid Debian ar member metadata") from error
+            if size < 0 or size > MAX_MEMBER_BYTES:
+                raise BundleError(f"Invalid Debian ar member size: {name}")
+            data = stream.read(size)
+            if len(data) != size:
+                raise BundleError(f"Truncated Debian ar member: {name}")
+            if size % 2 and len(stream.read(1)) != 1:
+                raise BundleError(f"Truncated Debian ar padding: {name}")
+            if name == expected["name"]:
+                if payload is not None:
+                    raise BundleError("Duplicate Debian data member")
+                payload = data
+    if payload is None:
+        raise BundleError("Locked Debian data member is missing")
+    if len(payload) != expected_size or hashlib.sha256(payload).hexdigest() != expected_hash:
+        raise BundleError("Debian data member does not match its lock")
+    temporary = destination / ".locked-data.tar.xz"
+    temporary.write_bytes(payload)
+    try:
+        safe_extract_tar(
+            temporary,
+            destination,
+            "tar.xz",
+            skip_internal_links=True,
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def extract_locked(
     component: str,
     artifact: dict[str, Any],
@@ -218,7 +385,15 @@ def extract_locked(
     destination = work_dir / re.sub(r"[^a-zA-Z0-9_.-]", "-", component)
     destination.mkdir(parents=True, exist_ok=False)
     if artifact["archive"] == "zip":
-        safe_extract_zip(archive, destination)
+        safe_extract_zip(
+            archive,
+            destination,
+            skip_internal_links=bool(artifact.get("skipInternalLinks", False)),
+        )
+    elif artifact["archive"] == "pkg":
+        safe_extract_pkg(archive, destination)
+    elif artifact["archive"] == "deb":
+        safe_extract_deb(archive, destination, artifact)
     else:
         safe_extract_tar(archive, destination, artifact["archive"])
     return destination
@@ -280,6 +455,263 @@ def extract_locked_regular_member(
                 shutil.copyfileobj(extracted, output)
     destination.chmod(0o644)
     return destination
+
+
+def extract_locked_regular_members_named(
+    component: str,
+    artifact: dict[str, Any],
+    member_name: str,
+    cache_dir: Path,
+    destination: Path,
+) -> list[tuple[PurePosixPath, Path]]:
+    """Extract every regular file with a locked basename below an archive root."""
+    artifact = checked_artifact(component, artifact)
+    if artifact["archive"] not in {"tar.gz", "tar.xz", "tar.bz2"}:
+        raise BundleError(
+            f"{component}: named-member extraction requires a tar archive"
+        )
+    if (
+        not member_name
+        or "/" in member_name
+        or "\\" in member_name
+        or safe_relative_path(member_name).name != member_name
+    ):
+        raise BundleError(f"{component}: invalid locked member basename")
+    root_value = artifact.get("root")
+    if not isinstance(root_value, str):
+        raise BundleError(f"{component}: locked archive root is missing")
+    root = safe_relative_path(root_value)
+    archive_path = download_locked(component, artifact, cache_dir)
+    modes = {"tar.gz": "r:gz", "tar.xz": "r:xz", "tar.bz2": "r:bz2"}
+    extracted: list[tuple[PurePosixPath, Path]] = []
+    seen: set[str] = set()
+    total = 0
+    destination.mkdir(parents=True, exist_ok=False)
+    with tarfile.open(archive_path, modes[artifact["archive"]]) as archive:
+        for member in archive:
+            relative = safe_relative_path(member.name.rstrip("/"))
+            if (
+                len(relative.parts) <= len(root.parts)
+                or relative.parts[: len(root.parts)] != root.parts
+            ):
+                continue
+            below_root = PurePosixPath(*relative.parts[len(root.parts) :])
+            if below_root.name != member_name:
+                continue
+            if not member.isfile() or member.size > MAX_MEMBER_BYTES:
+                raise BundleError(
+                    f"{component}: matching member is not a bounded regular file: "
+                    f"{member.name}"
+                )
+            key = below_root.as_posix()
+            if key in seen:
+                raise BundleError(f"{component}: duplicate matching member: {key}")
+            seen.add(key)
+            total += member.size
+            if total > MAX_MEMBER_BYTES:
+                raise BundleError(
+                    f"{component}: matching members exceed the safety limit"
+                )
+            output = destination.joinpath(*below_root.parts)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise BundleError(f"{component}: unable to read {member.name}")
+            with source, output.open("wb") as output_stream:
+                shutil.copyfileobj(source, output_stream)
+            output.chmod(0o644)
+            extracted.append((below_root, output))
+    return sorted(extracted, key=lambda item: item[0].as_posix())
+
+
+def extract_locked_regular_members(
+    component: str,
+    artifact: dict[str, Any],
+    relative_members: set[PurePosixPath],
+    cache_dir: Path,
+    destination: Path,
+) -> dict[PurePosixPath, Path]:
+    """Extract an exact set of bounded regular members below a locked archive root."""
+    artifact = checked_artifact(component, artifact)
+    if artifact["archive"] not in {"tar.gz", "tar.xz", "tar.bz2"}:
+        raise BundleError(
+            f"{component}: exact-member extraction requires a tar archive"
+        )
+    if not relative_members:
+        return {}
+    requested = {
+        safe_relative_path(relative.as_posix()) for relative in relative_members
+    }
+    root_value = artifact.get("root")
+    if not isinstance(root_value, str):
+        raise BundleError(f"{component}: locked archive root is missing")
+    root = safe_relative_path(root_value)
+    archive_path = download_locked(component, artifact, cache_dir)
+    modes = {"tar.gz": "r:gz", "tar.xz": "r:xz", "tar.bz2": "r:bz2"}
+    extracted: dict[PurePosixPath, Path] = {}
+    total = 0
+    destination.mkdir(parents=True, exist_ok=False)
+    with tarfile.open(archive_path, modes[artifact["archive"]]) as archive:
+        for member in archive:
+            relative = safe_relative_path(member.name.rstrip("/"))
+            if (
+                len(relative.parts) <= len(root.parts)
+                or relative.parts[: len(root.parts)] != root.parts
+            ):
+                continue
+            below_root = PurePosixPath(*relative.parts[len(root.parts) :])
+            if below_root not in requested:
+                continue
+            if below_root in extracted:
+                raise BundleError(
+                    f"{component}: duplicate requested member: {below_root}"
+                )
+            if not member.isfile() or member.size > MAX_MEMBER_BYTES:
+                raise BundleError(
+                    f"{component}: requested member is not a bounded regular file: "
+                    f"{member.name}"
+                )
+            total += member.size
+            if total > MAX_MEMBER_BYTES:
+                raise BundleError(
+                    f"{component}: requested members exceed the safety limit"
+                )
+            output = destination.joinpath(*below_root.parts)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise BundleError(f"{component}: unable to read {member.name}")
+            with source, output.open("wb") as output_stream:
+                shutil.copyfileobj(source, output_stream)
+            output.chmod(0o644)
+            extracted[below_root] = output
+    missing = requested.difference(extracted)
+    if missing:
+        rendered = ", ".join(sorted(path.as_posix() for path in missing))
+        raise BundleError(f"{component}: referenced members are missing: {rendered}")
+    return extracted
+
+
+def extract_locked_regular_tree(
+    component: str,
+    artifact: dict[str, Any],
+    relative_directory: PurePosixPath,
+    cache_dir: Path,
+    destination: Path,
+) -> dict[PurePosixPath, Path]:
+    """Extract all bounded regular files below one locked source directory."""
+    artifact = checked_artifact(component, artifact)
+    if artifact["archive"] not in {"tar.gz", "tar.xz", "tar.bz2"}:
+        raise BundleError(f"{component}: tree extraction requires a tar archive")
+    prefix = safe_relative_path(relative_directory.as_posix())
+    root_value = artifact.get("root")
+    if not isinstance(root_value, str):
+        raise BundleError(f"{component}: locked archive root is missing")
+    root = safe_relative_path(root_value)
+    archive_path = download_locked(component, artifact, cache_dir)
+    modes = {"tar.gz": "r:gz", "tar.xz": "r:xz", "tar.bz2": "r:bz2"}
+    extracted: dict[PurePosixPath, Path] = {}
+    total = 0
+    destination.mkdir(parents=True, exist_ok=False)
+    with tarfile.open(archive_path, modes[artifact["archive"]]) as archive:
+        for member in archive:
+            relative = safe_relative_path(member.name.rstrip("/"))
+            if (
+                len(relative.parts) <= len(root.parts)
+                or relative.parts[: len(root.parts)] != root.parts
+            ):
+                continue
+            below_root = PurePosixPath(*relative.parts[len(root.parts) :])
+            if below_root.parts[: len(prefix.parts)] != prefix.parts:
+                continue
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise BundleError(
+                    f"{component}: license tree contains a non-regular member: "
+                    f"{member.name}"
+                )
+            if below_root in extracted or member.size > MAX_MEMBER_BYTES:
+                raise BundleError(
+                    f"{component}: invalid or duplicate tree member: {member.name}"
+                )
+            total += member.size
+            if total > MAX_MEMBER_BYTES:
+                raise BundleError(f"{component}: tree exceeds the safety limit")
+            output = destination.joinpath(*below_root.parts)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                raise BundleError(f"{component}: unable to read {member.name}")
+            with source, output.open("wb") as output_stream:
+                shutil.copyfileobj(source, output_stream)
+            output.chmod(0o644)
+            extracted[below_root] = output
+    return extracted
+
+
+QT_SINGLE_FILE_PATTERN = re.compile(
+    r'"(?:LicenseFile|CopyrightFile)"\s*:\s*("(?:\\.|[^"\\])*")'
+)
+QT_FILE_ARRAY_PATTERN = re.compile(
+    r'"LicenseFiles"\s*:\s*\[(.*?)\]', re.DOTALL
+)
+JSON_STRING_PATTERN = re.compile(r'"(?:\\.|[^"\\])*"')
+
+
+def resolve_qt_attribution_license(
+    attribution: PurePosixPath, raw_reference: str
+) -> PurePosixPath:
+    """Resolve a Qt LicenseFile relative to its attribution without escaping root."""
+    if (
+        not raw_reference
+        or "\\" in raw_reference
+        or "\x00" in raw_reference
+        or PurePosixPath(raw_reference).is_absolute()
+    ):
+        raise BundleError(
+            f"Unsafe Qt LicenseFile reference in {attribution}: {raw_reference!r}"
+        )
+    parts = list(attribution.parent.parts)
+    for part in PurePosixPath(raw_reference).parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                raise BundleError(
+                    f"Qt LicenseFile escapes its source root in {attribution}"
+                )
+            parts.pop()
+            continue
+        parts.append(part)
+    if not parts:
+        raise BundleError(f"Empty Qt LicenseFile target in {attribution}")
+    return safe_relative_path(PurePosixPath(*parts).as_posix())
+
+
+def qt_attribution_license_references(
+    attribution: PurePosixPath, source: Path
+) -> set[PurePosixPath]:
+    """Read Qt's JSON-like attribution file and resolve every LicenseFile entry."""
+    try:
+        text = source.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise BundleError(f"Invalid Qt attribution text: {attribution}") from error
+    references: set[PurePosixPath] = set()
+    encoded_references = QT_SINGLE_FILE_PATTERN.findall(text)
+    for array_body in QT_FILE_ARRAY_PATTERN.findall(text):
+        encoded_references.extend(JSON_STRING_PATTERN.findall(array_body))
+    for encoded in encoded_references:
+        try:
+            raw_reference = json.loads(encoded)
+        except json.JSONDecodeError as error:
+            raise BundleError(
+                f"Invalid Qt LicenseFile string in {attribution}"
+            ) from error
+        if not isinstance(raw_reference, str):
+            raise BundleError(f"Invalid Qt LicenseFile value in {attribution}")
+        references.add(resolve_qt_attribution_license(attribution, raw_reference))
+    return references
 
 
 def require_regular(file_path: Path, label: str) -> Path:
@@ -374,6 +806,68 @@ class Stager:
         return destination
 
 
+def stage_directory(
+    stager: Stager,
+    source: Path,
+    destination: str,
+    component: str,
+    *,
+    preserve_executable: bool = False,
+    dereference_file_symlinks: bool = False,
+    link_root: Path | None = None,
+) -> None:
+    if source.is_symlink() or not source.is_dir():
+        raise BundleError(f"{component}: required directory is missing: {source}")
+    destination_root = safe_relative_path(destination)
+    boundary = (link_root or source).resolve()
+    copied = 0
+    for current, directory_names, file_names in os.walk(
+        source, topdown=True, followlinks=False
+    ):
+        current_path = Path(current)
+        for directory_name in directory_names:
+            directory = current_path / directory_name
+            if directory.is_symlink():
+                raise BundleError(
+                    f"{component}: directory tree contains an unsupported link: {directory}"
+                )
+        for file_name in file_names:
+            file_path = current_path / file_name
+            copy_source = file_path
+            if file_path.is_symlink():
+                if not dereference_file_symlinks:
+                    raise BundleError(
+                        f"{component}: directory tree contains a link: {file_path}"
+                    )
+                try:
+                    copy_source = file_path.resolve(strict=True)
+                except (OSError, RuntimeError) as error:
+                    raise BundleError(
+                        f"{component}: directory tree contains an invalid link: {file_path}"
+                    ) from error
+                if os.path.commonpath((str(boundary), str(copy_source))) != str(boundary):
+                    raise BundleError(
+                        f"{component}: directory tree link escapes its artifact: {file_path}"
+                    )
+            copy_source = require_regular(copy_source, component)
+            relative = file_path.relative_to(source)
+            output_relative = PurePosixPath(
+                *destination_root.parts, *relative.parts
+            ).as_posix()
+            stager.copy(
+                copy_source,
+                output_relative,
+                component,
+                executable=(
+                    preserve_executable
+                    and bool(copy_source.stat().st_mode & 0o111)
+                ),
+            )
+            copied += 1
+    if copied == 0:
+        raise BundleError(f"{component}: refusing to stage an empty directory: {source}")
+
+
 def stage_locked_source_licenses(
     label: str,
     component: dict[str, Any],
@@ -422,6 +916,97 @@ def stage_locked_source_licenses(
         )
         extracted_files[source_relative.as_posix()] = source_file
     return extracted_files
+
+
+def stage_locked_qt_attributions(
+    label: str,
+    dependency: dict[str, Any],
+    stager: Stager,
+    cache: Path,
+    work: Path,
+    owner: str,
+) -> tuple[list[str], list[str]]:
+    specification = dependency.get("qtAttributions")
+    if specification is None:
+        return [], []
+    if not isinstance(specification, dict):
+        raise BundleError(f"{label}: invalid Qt attribution lock")
+    member_name = specification.get("memberName")
+    expected_count = specification.get("count")
+    if (
+        member_name != "qt_attribution.json"
+        or not isinstance(expected_count, int)
+        or expected_count <= 0
+    ):
+        raise BundleError(f"{label}: incomplete Qt attribution lock")
+    source_artifact = checked_artifact(f"{label} source", dependency["source"])
+    extracted = extract_locked_regular_members_named(
+        f"{label} source",
+        source_artifact,
+        member_name,
+        cache,
+        work / f"{re.sub(r'[^A-Za-z0-9_.-]', '-', label)}-qt-attributions",
+    )
+    if len(extracted) != expected_count:
+        raise BundleError(
+            f"{label}: expected {expected_count} Qt attribution files, "
+            f"found {len(extracted)}"
+        )
+    destination_root = re.sub(r"[^A-Za-z0-9_.-]", "-", label)
+    license_references: set[PurePosixPath] = set()
+    for relative, source in extracted:
+        license_references.update(
+            qt_attribution_license_references(relative, source)
+        )
+    extracted_licenses = extract_locked_regular_members(
+        f"{label} Qt attribution licenses",
+        source_artifact,
+        license_references,
+        cache,
+        work / f"{re.sub(r'[^A-Za-z0-9_.-]', '-', label)}-qt-attribution-licenses",
+    )
+    module_license_files: dict[PurePosixPath, Path] = {}
+    license_directory_value = specification.get("licenseDirectory")
+    expected_license_count = specification.get("licenseFileCount")
+    if license_directory_value is not None or expected_license_count is not None:
+        if (
+            not isinstance(license_directory_value, str)
+            or not isinstance(expected_license_count, int)
+            or expected_license_count <= 0
+        ):
+            raise BundleError(f"{label}: incomplete Qt module license lock")
+        license_directory = safe_relative_path(license_directory_value)
+        module_license_files = extract_locked_regular_tree(
+            f"{label} Qt module licenses",
+            source_artifact,
+            license_directory,
+            cache,
+            work / f"{re.sub(r'[^A-Za-z0-9_.-]', '-', label)}-qt-module-licenses",
+        )
+        if len(module_license_files) != expected_license_count:
+            raise BundleError(
+                f"{label}: expected {expected_license_count} Qt module license files, "
+                f"found {len(module_license_files)}"
+            )
+    staged_attributions: list[str] = []
+    for relative, source in extracted:
+        destination = PurePosixPath(
+            "licenses", "die-qt-attributions", destination_root, *relative.parts
+        ).as_posix()
+        stager.copy(source, destination, owner)
+        staged_attributions.append(destination)
+    staged_licenses: list[str] = []
+    all_license_files = dict(module_license_files)
+    all_license_files.update(extracted_licenses)
+    for relative, source in sorted(
+        all_license_files.items(), key=lambda item: item[0].as_posix()
+    ):
+        destination = PurePosixPath(
+            "licenses", "die-qt-attributions", destination_root, *relative.parts
+        ).as_posix()
+        stager.copy(source, destination, owner)
+        staged_licenses.append(destination)
+    return staged_attributions, staged_licenses
 
 
 def stage_scrcpy(
@@ -601,6 +1186,222 @@ def stage_scrcpy(
         )
         + "\n",
         "scrcpy",
+    )
+
+
+def stage_die(
+    lock: dict[str, Any], target: str, stager: Stager, cache: Path, work: Path
+) -> None:
+    component = lock["components"]["diec"]
+    artifact = checked_artifact("Detect It Easy", component["targets"][target])
+    extracted = extract_locked("detect-it-easy", artifact, cache, work)
+    root = locked_root(extracted, artifact, "Detect It Easy")
+
+    stage_locked_source_licenses(
+        "Detect It Easy", component, stager, cache, work, owner="diec"
+    )
+    dependencies = component.get("sourceDependencies")
+    dependency_labels = artifact.get("sourceDependencies")
+    if not isinstance(dependencies, dict) or not isinstance(dependency_labels, list):
+        raise BundleError("Detect It Easy: source dependency lock is missing")
+    dependency_report: list[dict[str, Any]] = []
+    dependency_licenses: dict[str, dict[str, Path]] = {}
+    for label in dependency_labels:
+        if not isinstance(label, str) or not isinstance(dependencies.get(label), dict):
+            raise BundleError(
+                f"Detect It Easy: unknown source dependency lock {label!r}"
+            )
+        dependency = dependencies[label]
+        dependency_licenses[label] = stage_locked_source_licenses(
+            f"Detect It Easy {label}",
+            dependency,
+            stager,
+            cache,
+            work,
+            owner="diec",
+        )
+        attribution_files, attribution_license_files = stage_locked_qt_attributions(
+            label,
+            dependency,
+            stager,
+            cache,
+            work,
+            owner="diec",
+        )
+        dependency_report.append(
+            {
+                "name": label,
+                "version": dependency["version"],
+                "license": dependency["license"],
+                "projectUrl": dependency["projectUrl"],
+                "source": dependency["source"],
+                "linkage": dependency.get("linkage", "shared"),
+                "qtAttributionFiles": attribution_files,
+                "qtAttributionLicenseFiles": attribution_license_files,
+            }
+        )
+
+    executable_relative = safe_relative_path(artifact["executable"])
+    executable_name = "diec.exe" if target.startswith("windows-") else "diec"
+    stager.copy(
+        root.joinpath(*executable_relative.parts),
+        f"die/{executable_name}",
+        "diec",
+        executable=True,
+    )
+    database_relative = safe_relative_path(artifact["database"])
+    stage_directory(
+        stager,
+        root.joinpath(*database_relative.parts),
+        "die/db",
+        "diec",
+    )
+
+    staged_runtime: list[str] = []
+    if target.startswith("windows-"):
+        runtime_files = artifact.get("runtimeFiles")
+        proprietary = artifact.get("proprietaryRuntime")
+        if not isinstance(runtime_files, list) or not runtime_files:
+            raise BundleError("Detect It Easy: Windows runtime file lock is missing")
+        if not isinstance(proprietary, dict) or not isinstance(
+            proprietary.get("files"), list
+        ):
+            raise BundleError("Detect It Easy: Microsoft runtime metadata is missing")
+        proprietary_files = {
+            item["path"]: item for item in proprietary["files"]
+        }
+        for name in runtime_files:
+            relative = safe_relative_path(name)
+            if len(relative.parts) != 1:
+                raise BundleError(f"Detect It Easy: invalid Windows runtime file {name!r}")
+            source = root / relative.name
+            if relative.name in proprietary_files:
+                source = verify_locked_regular(
+                    source,
+                    f"Detect It Easy {relative.name}",
+                    proprietary_files[relative.name],
+                )
+            stager.copy(source, f"die/{relative.name}", "diec")
+            staged_runtime.append(f"die/{relative.name}")
+        stager.write_text(
+            "licenses/die-windows-runtime-provenance.txt",
+            "The adjacent Microsoft Visual C++ runtime DLLs are proprietary, "
+            "unmodified files from the hash-locked official Detect It Easy portable "
+            f"archive. Version: {proprietary['version']}. License terms: "
+            f"{proprietary['licenseUrl']}. Visual Studio 2019 REDIST list: "
+            f"{proprietary['redistributableListUrl']}. No corresponding source "
+            "is offered. "
+            f"Constraint: {proprietary['redistributionConstraint']}\n",
+            "diec",
+        )
+    elif target.startswith("linux-"):
+        runtime_files = artifact.get("runtimeFiles")
+        if not isinstance(runtime_files, list) or not runtime_files:
+            raise BundleError("Detect It Easy: Linux runtime file lock is missing")
+        for name in runtime_files:
+            relative = safe_relative_path(name)
+            if len(relative.parts) != 1:
+                raise BundleError(f"Detect It Easy: invalid Linux runtime file {name!r}")
+            stager.copy(
+                root / relative.name,
+                f"die/{relative.name}",
+                "diec",
+                executable=True,
+            )
+            staged_runtime.append(f"die/{relative.name}")
+
+        icu = artifact.get("icuRuntime")
+        if not isinstance(icu, dict) or not isinstance(icu.get("artifact"), dict):
+            raise BundleError("Detect It Easy: locked Linux ICU runtime is missing")
+        icu_artifact = checked_artifact(
+            "Detect It Easy ICU runtime", icu["artifact"]
+        )
+        icu_extracted = extract_locked(
+            "detect-it-easy-icu-runtime", icu_artifact, cache, work
+        )
+        icu_root = locked_root(
+            icu_extracted, icu_artifact, "Detect It Easy ICU runtime"
+        )
+        for item in icu["runtimeFiles"]:
+            source_relative = safe_relative_path(item["path"])
+            destination_relative = safe_relative_path(item["destination"])
+            if len(destination_relative.parts) != 1:
+                raise BundleError("Detect It Easy: invalid ICU runtime destination")
+            stager.copy(
+                icu_root.joinpath(*source_relative.parts),
+                f"die/{destination_relative.name}",
+                "diec",
+                executable=True,
+            )
+            staged_runtime.append(f"die/{destination_relative.name}")
+        notice_relative = safe_relative_path(icu["notice"])
+        runtime_notice = require_regular(
+            icu_root.joinpath(*notice_relative.parts),
+            "Detect It Easy ICU runtime notice",
+        )
+        source_notice = dependency_licenses["icu-66.1-ubuntu-patches"].get(
+            "copyright"
+        )
+        if source_notice is None or not files_equal(runtime_notice, source_notice):
+            raise BundleError(
+                "Detect It Easy ICU binary and source-package notices do not match"
+            )
+    else:
+        framework_names = artifact.get("frameworks")
+        framework_version = artifact.get("frameworkVersion")
+        if not isinstance(framework_names, list) or not isinstance(
+            framework_version, str
+        ):
+            raise BundleError("Detect It Easy: macOS framework lock is missing")
+        for name in framework_names:
+            if not isinstance(name, str) or not re.fullmatch(r"Qt[A-Za-z0-9]+", name):
+                raise BundleError(f"Detect It Easy: invalid framework name {name!r}")
+            source = (
+                root
+                / "Frameworks"
+                / f"{name}.framework"
+                / "Versions"
+                / framework_version
+            )
+            destination = (
+                f"Frameworks/{name}.framework/Versions/{framework_version}"
+            )
+            stage_directory(
+                stager,
+                source,
+                destination,
+                "diec",
+                preserve_executable=True,
+            )
+            staged_runtime.append(destination + "/")
+
+    stager.write_text(
+        "licenses/die-qt-relinking.txt",
+        "Detect It Easy uses dynamically linked Qt libraries, plus ICU on Linux. "
+        "The shipped shared libraries may be replaced with ABI-compatible modified "
+        "builds. Exact corresponding Qt/ICU sources and Ubuntu ICU packaging patches "
+        "are included in the release companion source archive; the lock and "
+        "provenance record identify each version.\n",
+        "diec",
+    )
+    stager.write_text(
+        "licenses/die-provenance.json",
+        json.dumps(
+            {
+                "version": component["version"],
+                "target": target,
+                "portableArchive": artifact,
+                "sourceArchive": component["source"],
+                "executable": f"die/{executable_name}",
+                "database": "die/db",
+                "runtime": staged_runtime,
+                "sourceDependencies": dependency_report,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        "diec",
     )
 
 
@@ -804,6 +1605,7 @@ def stage_go_ios(
     run(["git", "apply", str(patch_path)], source)
 
     goos, goarch = TARGETS[target]
+    expected_go_version = f"go{component['goVersion']}"
     environment = build_environment(target)
     environment.update(
         {
@@ -811,10 +1613,10 @@ def stage_go_ios(
             "GOOS": goos,
             "GOARCH": goarch,
             "GOFLAGS": "-mod=readonly",
+            "GOTOOLCHAIN": expected_go_version,
         }
     )
     go_version = run(["go", "version"], source, environment).split()
-    expected_go_version = f"go{component['goVersion']}"
     if len(go_version) < 3 or go_version[2] != expected_go_version:
         actual = go_version[2] if len(go_version) >= 3 else "unknown"
         raise BundleError(
@@ -930,6 +1732,7 @@ def stage_mobius_ssh(
         )
 
     goos, goarch = TARGETS[target]
+    expected_go_version = f"go{component['goVersion']}"
     environment = build_environment(target)
     environment.update(
         {
@@ -937,10 +1740,10 @@ def stage_mobius_ssh(
             "GOOS": goos,
             "GOARCH": goarch,
             "GOFLAGS": "-mod=readonly",
+            "GOTOOLCHAIN": expected_go_version,
         }
     )
     go_version = run(["go", "version"], source, environment).split()
-    expected_go_version = f"go{component['goVersion']}"
     if len(go_version) < 3 or go_version[2] != expected_go_version:
         actual = go_version[2] if len(go_version) >= 3 else "unknown"
         raise BundleError(f"mobius-ssh requires {expected_go_version}; active Go is {actual}")
@@ -1164,7 +1967,14 @@ def write_manifest(
                 "executable": bool(file_path.stat().st_mode & 0o111),
             }
         )
-    component_names = ["scrcpy", "aapt2", "go-ios", "mobius-ssh", "ffmpeg"]
+    component_names = [
+        "scrcpy",
+        "aapt2",
+        "go-ios",
+        "mobius-ssh",
+        "ffmpeg",
+        "diec",
+    ]
     components = []
     for name in component_names:
         item = lock["components"][name]
@@ -1238,6 +2048,7 @@ def main() -> int:
             stage_go_ios(repo_root, lock, args.target, stager, cache, work)
             stage_mobius_ssh(repo_root, lock, args.target, stager, cache, work)
             stage_ffmpeg(repo_root, lock, args.target, stager, cache, work)
+            stage_die(lock, args.target, stager, cache, work)
         notices = repo_root / "src-tauri/resources/tools/THIRD_PARTY_NOTICES.txt"
         stager.copy(
             notices,

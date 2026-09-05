@@ -1,6 +1,7 @@
 import { Circle, Code2, Copy, Download, Eraser, Play, Search, ShieldAlert, Smartphone, TerminalSquare } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { writeClipboardText } from "../lib/clipboard";
 import type { Device } from "../types";
 import { Button, EmptyState, InlineNotice, Modal, Panel, StatusBadge, StatusDot } from "../components/Ui";
 
@@ -54,26 +55,6 @@ function outputText(entries: OutputEntry[], device: Device) {
     entry.error ? `ERROR: ${entry.error}` : "",
     entry.duration === undefined ? "" : `[${entry.duration} ms]`,
   ].filter(Boolean).join("\n")).join("\n\n")}\n`;
-}
-
-async function copyToClipboard(value: string) {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch {
-      // Fall through for WebViews where the Clipboard API exists but is denied.
-    }
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) throw new Error("当前系统不允许写入剪贴板");
 }
 
 export default function ConsolePage({ activeDevice, initialCommand = "", notify, record }: ConsoleProps) {
@@ -134,7 +115,7 @@ export default function ConsolePage({ activeDevice, initialCommand = "", notify,
   const copyAll = async () => {
     if (!activeDevice || !entries.length) return;
     try {
-      await copyToClipboard(outputText(entries, activeDevice));
+      await writeClipboardText(outputText(entries, activeDevice));
       notify("success", "控制台输出已复制", `共 ${entries.length} 条命令记录`);
     } catch (error) { notify("error", "复制失败", error instanceof Error ? error.message : String(error)); }
   };
@@ -240,14 +221,14 @@ export default function ConsolePage({ activeDevice, initialCommand = "", notify,
           {!visibleEntries.length && filter && <div className="terminal-empty">没有匹配的输出</div>}
           <div ref={endRef} />
         </main>
-        <div className="terminal-suggestions">{suggestedCommands.map((item) => <button key={item.command} title={`填入：${item.command}（不会自动执行）`} onClick={() => setCommand(item.command)}>{item.label}</button>)}</div>
+        <div className="terminal-suggestions">{suggestedCommands.map((item) => <button key={item.command} disabled={running} title={`立即执行：${item.command}`} onClick={() => void runCommand(item.command)}>{item.label}</button>)}</div>
         <form className="terminal-input" onSubmit={execute}>
           <span className="terminal-prompt">{activeDevice.rooted ? "#" : "$"}</span>
           <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={historyKey} placeholder="输入设备 Shell 命令…" autoCapitalize="off" autoCorrect="off" spellCheck={false} disabled={running} />
           <Button type="submit" variant="primary" icon={<Play size={14} fill="currentColor" />} disabled={!command.trim() || running}>{running ? "运行中" : "执行"}</Button>
         </form>
       </div>
-      <div className="console-footnote"><Code2 size={14} /><span>上方预设只会填入已知的只读命令，仍需手动点击“执行”；Mobius 不会把输入拼接到本机 Shell。</span></div>
+      <div className="console-footnote"><Code2 size={14} /><span>上方预设是固定的只读查询，点击即执行；自定义命令仍会按风险提示确认。Mobius 不会把输入拼接到本机 Shell。</span></div>
       {pendingCommand && <Modal title="确认执行设备写入命令" subtitle={`目标：${activeDevice.name} · ${activeDevice.id}`} onClose={() => setPendingCommand(undefined)} footer={<><Button onClick={() => setPendingCommand(undefined)}>取消</Button><Button variant="danger" onClick={() => { const next = pendingCommand; setPendingCommand(undefined); void runCommand(next); }}>确认并执行</Button></>}><div className="form-stack"><InlineNotice tone="danger" title="该命令不在只读白名单">它可能修改设备状态、写入文件、停止进程或重启设备。请核对目标与完整命令。</InlineNotice><div className="command-preview"><span>将在设备 Shell 中执行</span><code>{pendingCommand}</code></div></div></Modal>}
     </div>
   );

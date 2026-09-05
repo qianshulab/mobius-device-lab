@@ -35,6 +35,7 @@ const MAX_ALLOWED_ROOTS: usize = 32;
 const MAX_SESSIONS: usize = 16;
 const PROBE_MARKER: &str = "MOBIUS_SSH_READY";
 const PATH_MARKER: &str = "MOBIUS_PATH_READY";
+const FILE_TARGET_MARKER: &str = "MOBIUS_FILE_TARGET";
 const TYPE_MARKER: &str = "MOBIUS_TYPE";
 const LIST_MARKER: &str = "MOBIUS_LIST_BEGIN";
 const ASKPASS_MARKER_ENV: &str = "MOBIUS_SSH_ASKPASS";
@@ -219,10 +220,7 @@ pub async fn download_ios_ssh_file(
         match remote_entry_kind(&connection, &remote_source)? {
             RemoteEntryKind::File => {}
             RemoteEntryKind::Link => {
-                return Err(ApiError::new(
-                    "unsafe_remote_link",
-                    "Refusing to download through a remote symbolic link",
-                ));
+                verify_remote_file_link_boundary(&connection, &remote_source)?;
             }
             _ => {
                 return Err(ApiError::new(
@@ -1189,6 +1187,91 @@ fn remote_entry_kind(
     }
 }
 
+/// Resolves the final target of a remote file link on the device and verifies
+/// that it remains under one of the session's physical allowed roots.
+///
+/// The original lexical link is intentionally kept as the subsequent SFTP
+/// source. Rootless jailbreaks may expose a stable `/var/mobile/...` alias to
+/// SFTP while the corresponding `pwd -P` path contains a volatile `.jbroot-*`
+/// prefix that a separately launched SFTP process cannot open.
+fn verify_remote_file_link_boundary(
+    connection: &IosSshConnection,
+    remote_link: &str,
+) -> AppResult<()> {
+    let command = remote_file_target_command(remote_link);
+    let output = run_ssh_command(connection, &command, SSH_TIMEOUT)?;
+    let physical_target = parse_remote_file_target(&output.stdout)?;
+    require_allowed_physical_path(connection, &physical_target)
+}
+
+fn remote_file_target_command(remote_link: &str) -> String {
+    let quoted_link = validation::quote_remote(remote_link);
+    format!(
+        "mobius_path={quoted_link}; mobius_hops=0; \
+         while [ -h \"$mobius_path\" ] || [ -L \"$mobius_path\" ]; do \
+           mobius_hops=$((mobius_hops + 1)); \
+           if [ \"$mobius_hops\" -gt 40 ]; then printf '{FILE_TARGET_MARKER}:too_many_links\\n'; exit 0; fi; \
+           mobius_link=$(readlink \"$mobius_path\") || {{ printf '{FILE_TARGET_MARKER}:unresolved\\n'; exit 0; }}; \
+           case \"$mobius_link\" in \
+             /*) mobius_path=$mobius_link ;; \
+             *) mobius_parent=${{mobius_path%/*}}; [ -n \"$mobius_parent\" ] || mobius_parent=/; \
+                mobius_path=$mobius_parent/$mobius_link ;; \
+           esac; \
+         done; \
+         if [ ! -f \"$mobius_path\" ]; then printf '{FILE_TARGET_MARKER}:not_file\\n'; exit 0; fi; \
+         mobius_name=${{mobius_path##*/}}; mobius_parent=${{mobius_path%/*}}; \
+         [ -n \"$mobius_parent\" ] || mobius_parent=/; \
+         cd \"$mobius_parent\" || {{ printf '{FILE_TARGET_MARKER}:unresolved\\n'; exit 0; }}; \
+         mobius_parent=$(pwd -P) || {{ printf '{FILE_TARGET_MARKER}:unresolved\\n'; exit 0; }}; \
+         printf '{FILE_TARGET_MARKER}:file\\n%s/%s\\n' \"${{mobius_parent%/}}\" \"$mobius_name\""
+    )
+}
+
+fn parse_remote_file_target(stdout: &str) -> AppResult<String> {
+    let lines = stdout.lines().map(str::trim).collect::<Vec<_>>();
+    let (marker_index, status) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(index, line)| {
+            line.strip_prefix(&format!("{FILE_TARGET_MARKER}:"))
+                .map(|status| (index, status))
+        })
+        .ok_or_else(|| {
+            ApiError::new(
+                "invalid_remote_file_response",
+                "The device did not return a resolved remote file target",
+            )
+        })?;
+
+    match status {
+        "file" => {
+            let path = lines.get(marker_index + 1).ok_or_else(|| {
+                ApiError::new(
+                    "invalid_remote_file_response",
+                    "The device returned an empty remote file target",
+                )
+            })?;
+            normalize_remote_path(path)
+        }
+        "not_file" => Err(ApiError::new(
+            "remote_file_not_found",
+            "The remote symbolic link does not resolve to a regular file",
+        )),
+        "too_many_links" => Err(ApiError::new(
+            "remote_link_limit",
+            "The remote symbolic link chain exceeds the 40-link safety limit",
+        )),
+        "unresolved" => Err(ApiError::new(
+            "remote_link_unresolved",
+            "The remote symbolic link target could not be resolved",
+        )),
+        _ => Err(ApiError::new(
+            "invalid_remote_file_response",
+            "The device returned an unknown remote file target status",
+        )),
+    }
+}
+
 fn normalize_remote_path(value: &str) -> AppResult<String> {
     validation::remote_path(value)?;
     if value.chars().any(char::is_control) {
@@ -1232,6 +1315,21 @@ fn require_allowed_path(
             } else {
                 "The remote path is outside the configured allowed roots"
             },
+        ))
+    }
+}
+
+fn require_allowed_physical_path(connection: &IosSshConnection, path: &str) -> AppResult<()> {
+    if connection
+        .allowed_roots
+        .iter()
+        .any(|root| is_path_within(path, root))
+    {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            "remote_path_outside_allowed_roots",
+            "The resolved remote file target is outside the allowed physical roots",
         ))
     }
 }
@@ -1709,6 +1807,101 @@ mod tests {
             ":/var/mobile/Containers/Shared/AppGroup/.jbroot-ABC/var/mobile/Library/Preferences/example.plist"
         ));
         assert!(!spec.contains("/rootfs/"));
+    }
+
+    #[test]
+    fn resolved_file_link_target_is_checked_against_the_physical_root() {
+        let mut connection = connection(IosSshAuthentication::PrivateKey(PathBuf::from(
+            "/tmp/test-key",
+        )));
+        connection.allowed_roots = vec!["/rootfs/.jbroot-ABC/var/mobile".into()];
+
+        let inside = parse_remote_file_target(
+            "login banner\nMOBIUS_FILE_TARGET:file\n/rootfs/.jbroot-ABC/var/mobile/Library/example.plist\n",
+        )
+        .expect("resolved in-root target");
+        assert!(require_allowed_physical_path(&connection, &inside).is_ok());
+
+        let outside = parse_remote_file_target(
+            "MOBIUS_FILE_TARGET:file\n/rootfs/.jbroot-ABC/etc/master.passwd\n",
+        )
+        .expect("resolved out-of-root target");
+        let error = require_allowed_physical_path(&connection, &outside)
+            .expect_err("link target outside the allowed root");
+        assert_eq!(error.code, "remote_path_outside_allowed_roots");
+
+        let alias_only = parse_remote_file_target(
+            "MOBIUS_FILE_TARGET:file\n/var/mobile/Library/alias-only.plist\n",
+        )
+        .expect("syntactically valid alias target");
+        assert!(require_allowed_path(&connection, &alias_only, false).is_ok());
+        assert_eq!(
+            require_allowed_physical_path(&connection, &alias_only)
+                .expect_err("a physical result must not be accepted via the lexical alias")
+                .code,
+            "remote_path_outside_allowed_roots"
+        );
+    }
+
+    #[test]
+    fn remote_file_target_statuses_fail_closed() {
+        for (status, expected_code) in [
+            ("not_file", "remote_file_not_found"),
+            ("too_many_links", "remote_link_limit"),
+            ("unresolved", "remote_link_unresolved"),
+            ("unexpected", "invalid_remote_file_response"),
+        ] {
+            let error = parse_remote_file_target(&format!("{FILE_TARGET_MARKER}:{status}\n"))
+                .expect_err("non-file target must be rejected");
+            assert_eq!(error.code, expected_code);
+        }
+        assert_eq!(
+            parse_remote_file_target("/var/mobile/no-marker\n")
+                .expect_err("missing marker")
+                .code,
+            "invalid_remote_file_response"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn device_side_resolver_follows_relative_file_link_chains() {
+        use std::os::unix::fs::symlink;
+
+        let test_root = std::env::temp_dir().join(format!(
+            "mobius-ios-link-test-{}",
+            new_session_id().expect("test nonce")
+        ));
+        let files = test_root.join("files");
+        fs::create_dir_all(&files).expect("create test directory");
+        let target_name = "payload O'Brien.bin";
+        fs::write(files.join(target_name), b"payload").expect("write target");
+        symlink(
+            format!("files/{target_name}"),
+            test_root.join("second link"),
+        )
+        .expect("second link");
+        symlink("second link", test_root.join("first link")).expect("first link");
+
+        let link = test_root.join("first link").to_string_lossy().into_owned();
+        let command = remote_file_target_command(&link);
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .expect("run device-compatible shell resolver");
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 resolver output");
+        let resolved = parse_remote_file_target(&stdout).expect("resolved target");
+        let expected = files
+            .canonicalize()
+            .expect("canonical files directory")
+            .join(target_name)
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolved, expected);
+
+        fs::remove_dir_all(&test_root).expect("remove test directory");
     }
 
     #[test]

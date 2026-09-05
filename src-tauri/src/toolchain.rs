@@ -2,6 +2,7 @@ use crate::models::{ApiError, AppResult, ConfigureToolchainRequest, ToolchainCon
 use std::{
     cmp::Reverse,
     collections::HashSet,
+    ffi::OsString,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -33,6 +34,128 @@ impl ToolSource {
 pub(crate) struct ResolvedTool {
     pub path: PathBuf,
     pub source: ToolSource,
+}
+
+pub(crate) fn bundled_tool_environment(
+    program: &str,
+    executable: &Path,
+) -> Vec<(OsString, OsString)> {
+    #[cfg(target_os = "linux")]
+    if program == "diec" {
+        if let Some(directory) = executable.parent() {
+            return vec![(
+                OsString::from("LD_LIBRARY_PATH"),
+                directory.as_os_str().into(),
+            )];
+        }
+    }
+    let _ = (program, executable);
+    Vec::new()
+}
+
+/// Return the reviewed DIE database only when both Android signature catalogs
+/// contain their loader and a substantial rule set. Merely finding an empty
+/// `db` directory is not enough: `diec` can still exit successfully and would
+/// otherwise turn a broken installation into a false "not detected" result.
+pub(crate) fn validate_bundled_die_database(executable: &Path) -> AppResult<PathBuf> {
+    let database = executable
+        .parent()
+        .map(|directory| directory.join("db"))
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| {
+            ApiError::new(
+                "bundled_die_database_incomplete",
+                "The bundled Detect It Easy signature database is unavailable",
+            )
+        })?;
+    let mut directories = vec![database.clone()];
+    let mut total_files = 0_usize;
+    while let Some(directory) = directories.pop() {
+        for entry in fs::read_dir(&directory).map_err(|_| {
+            ApiError::new(
+                "bundled_die_database_incomplete",
+                "The bundled Detect It Easy signature database is unreadable",
+            )
+        })? {
+            let entry = entry.map_err(|_| {
+                ApiError::new(
+                    "bundled_die_database_incomplete",
+                    "The bundled Detect It Easy signature database is unreadable",
+                )
+            })?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(|_| {
+                ApiError::new(
+                    "bundled_die_database_incomplete",
+                    "The bundled Detect It Easy signature database is unreadable",
+                )
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(ApiError::new(
+                    "bundled_die_database_incomplete",
+                    "The bundled Detect It Easy signature database is incomplete",
+                ));
+            }
+            if metadata.is_dir() {
+                directories.push(entry.path());
+            } else if metadata.is_file() {
+                total_files += 1;
+            } else {
+                return Err(ApiError::new(
+                    "bundled_die_database_incomplete",
+                    "The bundled Detect It Easy signature database is incomplete",
+                ));
+            }
+        }
+    }
+    if total_files != 2_047 {
+        return Err(ApiError::new(
+            "bundled_die_database_incomplete",
+            "The bundled Detect It Easy signature database is incomplete",
+        ));
+    }
+    for relative in [
+        "info.ini",
+        "APK/_init",
+        "APK/_APK.0.sg",
+        "DEX/_init",
+        "DEX/_DEX.0.sg",
+    ] {
+        let metadata = fs::symlink_metadata(database.join(relative)).map_err(|_| {
+            ApiError::new(
+                "bundled_die_database_incomplete",
+                "The bundled Detect It Easy APK/DEX signature database is incomplete",
+            )
+        })?;
+        if !metadata.file_type().is_file() || metadata.len() == 0 {
+            return Err(ApiError::new(
+                "bundled_die_database_incomplete",
+                "The bundled Detect It Easy APK/DEX signature database is incomplete",
+            ));
+        }
+    }
+    for (catalog, expected_rules) in [("APK", 51_usize), ("DEX", 28_usize)] {
+        let directory = database.join(catalog);
+        let rules = fs::read_dir(directory)
+            .map_err(|_| {
+                ApiError::new(
+                    "bundled_die_database_incomplete",
+                    "The bundled Detect It Easy APK/DEX signature database is unreadable",
+                )
+            })?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_file())
+                    && entry.path().extension().is_some_and(|value| value == "sg")
+            })
+            .count();
+        if rules != expected_rules {
+            return Err(ApiError::new(
+                "bundled_die_database_incomplete",
+                "The bundled Detect It Easy APK/DEX signature database is incomplete",
+            ));
+        }
+    }
+    Ok(database)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -622,14 +745,22 @@ fn is_ios_tool(program: &str) -> bool {
 fn tool_candidates(directory: &Path, program: &str) -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        vec![
+        let mut candidates = vec![
             directory.join(format!("{program}.exe")),
             directory.join(format!("{program}.com")),
-        ]
+        ];
+        if program == "diec" {
+            candidates.push(directory.join("die").join("diec.exe"));
+        }
+        candidates
     }
     #[cfg(not(windows))]
     {
-        vec![directory.join(program)]
+        let mut candidates = vec![directory.join(program)];
+        if program == "diec" {
+            candidates.push(directory.join("die").join("diec"));
+        }
+        candidates
     }
 }
 
@@ -767,6 +898,70 @@ mod tests {
         .expect("managed adb should resolve");
         assert_eq!(resolved.path, configured);
         assert_eq!(resolved.source, ToolSource::Configured);
+    }
+
+    #[test]
+    fn bundled_die_cli_resolves_from_reviewed_nested_directory() {
+        let tree = TempTree::new();
+        let target = bundled_target_directory();
+        let expected = tree.executable(&format!("bundled/{target}/die"), "diec");
+        let resolved = resolve_bundled_tool_from_roots("diec", &[tree.0.join("bundled")])
+            .expect("nested bundled diec should resolve");
+        assert_eq!(resolved.path, expected);
+        assert_eq!(resolved.source, ToolSource::Bundled);
+    }
+
+    #[test]
+    fn bundled_die_database_requires_complete_apk_and_dex_catalogs() {
+        let tree = TempTree::new();
+        let die = tree.directory("die");
+        let executable = die.join("diec");
+        fs::write(&executable, b"test executable").expect("test executable must be created");
+        let database = die.join("db");
+        fs::create_dir_all(database.join("APK")).expect("APK catalog must be created");
+        fs::create_dir_all(database.join("DEX")).expect("DEX catalog must be created");
+        for relative in [
+            "info.ini",
+            "APK/_init",
+            "APK/_APK.0.sg",
+            "DEX/_init",
+            "DEX/_DEX.0.sg",
+        ] {
+            fs::write(database.join(relative), b"signature data")
+                .expect("signature sentinel must be created");
+        }
+        for index in 0..50 {
+            fs::write(
+                database.join("APK").join(format!("rule-{index}.sg")),
+                b"rule",
+            )
+            .expect("APK rule must be created");
+        }
+        for index in 0..27 {
+            fs::write(
+                database.join("DEX").join(format!("rule-{index}.sg")),
+                b"rule",
+            )
+            .expect("DEX rule must be created");
+        }
+        let other = database.join("Other");
+        fs::create_dir(&other).expect("other catalog must be created");
+        for index in 0..1_965 {
+            fs::write(other.join(format!("entry-{index}")), b"data")
+                .expect("database entry must be created");
+        }
+
+        assert_eq!(
+            validate_bundled_die_database(&executable).expect("complete database must validate"),
+            database
+        );
+        fs::remove_file(database.join("DEX/_init")).expect("test sentinel must be removed");
+        assert_eq!(
+            validate_bundled_die_database(&executable)
+                .expect_err("partial database must be rejected")
+                .code,
+            "bundled_die_database_incomplete"
+        );
     }
 
     #[test]

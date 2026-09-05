@@ -14,7 +14,7 @@ import stat
 import struct
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -31,6 +31,7 @@ H264_SMOKE_FRAME = (
     "AAAAAWdCwAraewEQAAADABAAAAMAKPEiagAAAAFozg/IAAABZYiEOhGKAAI4scAAQaI4ABXA"
 )
 MACOS_MINIMUM_VERSION = (12, 0, 0)
+DIE_ARM64_MINIMUM_VERSION = (13, 0, 0)
 # Google still ships the Windows platform-tools 37.0.0 ADB client and its two
 # companion DLLs as PE32/i386 binaries. They are the only 32-bit payloads we
 # intentionally permit in the x86_64 package; Windows x64 runs them through
@@ -60,6 +61,68 @@ BANNED_SUFFIXES = {
 
 class VerifyError(RuntimeError):
     pass
+
+
+QT_SINGLE_FILE_PATTERN = re.compile(
+    r'"(?:LicenseFile|CopyrightFile)"\s*:\s*("(?:\\.|[^"\\])*")'
+)
+QT_FILE_ARRAY_PATTERN = re.compile(
+    r'"LicenseFiles"\s*:\s*\[(.*?)\]', re.DOTALL
+)
+JSON_STRING_PATTERN = re.compile(r'"(?:\\.|[^"\\])*"')
+
+
+def resolve_qt_attribution_license(
+    attribution: PurePosixPath, raw_reference: str
+) -> PurePosixPath:
+    if (
+        not raw_reference
+        or "\\" in raw_reference
+        or "\x00" in raw_reference
+        or PurePosixPath(raw_reference).is_absolute()
+    ):
+        raise VerifyError(
+            f"Unsafe Qt LicenseFile reference in {attribution}: {raw_reference!r}"
+        )
+    parts = list(attribution.parent.parts)
+    for part in PurePosixPath(raw_reference).parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                raise VerifyError(
+                    f"Qt LicenseFile escapes its attribution root in {attribution}"
+                )
+            parts.pop()
+            continue
+        parts.append(part)
+    if not parts:
+        raise VerifyError(f"Empty Qt LicenseFile target in {attribution}")
+    return PurePosixPath(*parts)
+
+
+def qt_attribution_license_references(
+    attribution: PurePosixPath, source: Path
+) -> set[PurePosixPath]:
+    try:
+        text = source.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise VerifyError(f"Invalid Qt attribution text: {attribution}") from error
+    references: set[PurePosixPath] = set()
+    encoded_references = QT_SINGLE_FILE_PATTERN.findall(text)
+    for array_body in QT_FILE_ARRAY_PATTERN.findall(text):
+        encoded_references.extend(JSON_STRING_PATTERN.findall(array_body))
+    for encoded in encoded_references:
+        try:
+            raw_reference = json.loads(encoded)
+        except json.JSONDecodeError as error:
+            raise VerifyError(
+                f"Invalid Qt LicenseFile string in {attribution}"
+            ) from error
+        if not isinstance(raw_reference, str):
+            raise VerifyError(f"Invalid Qt LicenseFile value in {attribution}")
+        references.add(resolve_qt_attribution_license(attribution, raw_reference))
+    return references
 
 
 def sha256_file(file_path: Path) -> str:
@@ -109,6 +172,7 @@ def expected_programs(target: str) -> dict[str, list[str]]:
         f"ios{suffix}": ["version"],
         f"ssh{suffix}": ["-V"],
         f"scp{suffix}": ["-V"],
+        f"die/diec{suffix}": ["--version"],
     }
 
 
@@ -125,6 +189,7 @@ def expected_version_markers(target: str) -> dict[str, list[str]]:
         f"ios{suffix}": ['"version":"1.3.2-mobius.1"'],
         f"ssh{suffix}": ["Mobius SSH/SFTP Client 0.2.0", "x/crypto/ssh"],
         f"scp{suffix}": ["Mobius SSH/SFTP Client 0.2.0", "x/crypto/ssh"],
+        f"die/diec{suffix}": ["die 3.21"],
     }
 
 
@@ -133,7 +198,10 @@ def decode_macos_version(value: int) -> tuple[int, int, int]:
 
 
 def verify_macos_minimum_version(
-    file_path: Path, target: str, expected_cpu: int
+    file_path: Path,
+    target: str,
+    expected_cpu: int,
+    supported_version: tuple[int, int, int] = MACOS_MINIMUM_VERSION,
 ) -> None:
     with file_path.open("rb") as stream:
         magic = stream.read(4)
@@ -206,9 +274,9 @@ def verify_macos_minimum_version(
     if not versions:
         raise VerifyError(f"Mach-O does not declare a macOS minimum version: {file_path}")
     minimum = max(versions)
-    if minimum > MACOS_MINIMUM_VERSION:
+    if minimum > supported_version:
         actual = ".".join(str(part) for part in minimum)
-        supported = ".".join(str(part) for part in MACOS_MINIMUM_VERSION)
+        supported = ".".join(str(part) for part in supported_version)
         raise VerifyError(
             f"{file_path.name} requires macOS {actual}, above the supported {supported} floor"
         )
@@ -255,12 +323,20 @@ def verify_machine(file_path: Path, target: str) -> None:
         return
 
     expected_cpu = 0x0100000C if target == "macos-aarch64" else 0x01000007
+    die_payload = "die" in file_path.parts or "Frameworks" in file_path.parts
+    supported_version = (
+        DIE_ARM64_MINIMUM_VERSION
+        if target == "macos-aarch64" and die_payload
+        else MACOS_MINIMUM_VERSION
+    )
     magic = data[:4]
     if magic == b"\xcf\xfa\xed\xfe":
         cpu = struct.unpack_from("<I", data, 4)[0]
         if cpu != expected_cpu:
             raise VerifyError(f"Unexpected Mach-O architecture: {file_path}")
-        verify_macos_minimum_version(file_path, target, expected_cpu)
+        verify_macos_minimum_version(
+            file_path, target, expected_cpu, supported_version
+        )
         return
     if magic in {b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"}:
         count = struct.unpack_from(">I", data, 4)[0]
@@ -272,7 +348,9 @@ def verify_machine(file_path: Path, target: str) -> None:
         }
         if expected_cpu not in cpus:
             raise VerifyError(f"Universal Mach-O lacks the target architecture: {file_path}")
-        verify_macos_minimum_version(file_path, target, expected_cpu)
+        verify_macos_minimum_version(
+            file_path, target, expected_cpu, supported_version
+        )
         return
     raise VerifyError(f"Expected a Mach-O executable: {file_path}")
 
@@ -328,7 +406,14 @@ def verify_manifest(root: Path, target: str, lock: dict[str, Any]) -> dict[str, 
                 continue
             raise VerifyError(f"Bundle contains a forbidden payload type: {file_path}")
 
-    expected_components = {"scrcpy", "aapt2", "go-ios", "mobius-ssh", "ffmpeg"}
+    expected_components = {
+        "scrcpy",
+        "aapt2",
+        "go-ios",
+        "mobius-ssh",
+        "ffmpeg",
+        "diec",
+    }
     components = manifest.get("components")
     if not isinstance(components, list):
         raise VerifyError("Bundle component list is invalid")
@@ -343,11 +428,223 @@ def verify_manifest(root: Path, target: str, lock: dict[str, Any]) -> dict[str, 
             or item.get("license") != locked.get("license")
         ):
             raise VerifyError(f"Component does not match lock: {item.get('name')}")
+    verify_die_layout(target_dir, target, lock)
     return manifest
+
+
+def verify_die_layout(target_dir: Path, target: str, lock: dict[str, Any]) -> None:
+    suffix = ".exe" if target.startswith("windows-") else ""
+    executable = target_dir / "die" / f"diec{suffix}"
+    if not executable.is_file():
+        raise VerifyError("Detect It Easy console executable is missing")
+    verify_machine(executable, target)
+    database = target_dir / "die" / "db"
+    database_files = [path for path in database.rglob("*") if path.is_file()]
+    component = lock["components"]["diec"]
+    database_validation = component.get("databaseValidation")
+    if not isinstance(database_validation, dict):
+        raise VerifyError("Detect It Easy database validation lock is missing")
+    expected_total = database_validation.get("expectedTotalFiles")
+    if (
+        not database.is_dir()
+        or not isinstance(expected_total, int)
+        or expected_total <= 0
+        or len(database_files) != expected_total
+    ):
+        raise VerifyError("Detect It Easy signature database is missing or incomplete")
+    required_files = database_validation.get("requiredFiles")
+    if not isinstance(required_files, list) or not required_files:
+        raise VerifyError("Detect It Easy required database entries are not locked")
+    for value in required_files:
+        if (
+            not isinstance(value, str)
+            or Path(value).is_absolute()
+            or ".." in Path(value).parts
+            or not (database / value).is_file()
+        ):
+            raise VerifyError(f"Detect It Easy database entry is missing: {value!r}")
+    rule_directories = database_validation.get("ruleDirectories")
+    if not isinstance(rule_directories, list) or not rule_directories:
+        raise VerifyError("Detect It Easy database rule-count lock is missing")
+    for entry in rule_directories:
+        if not isinstance(entry, dict):
+            raise VerifyError("Detect It Easy database rule-count lock is invalid")
+        relative = entry.get("path")
+        expected_rules = entry.get("expectedRuleFiles")
+        if (
+            not isinstance(relative, str)
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or not isinstance(expected_rules, int)
+            or expected_rules <= 0
+        ):
+            raise VerifyError("Detect It Easy database rule-count lock is invalid")
+        rule_count = sum(
+            1 for path in (database / relative).rglob("*.sg") if path.is_file()
+        )
+        if rule_count != expected_rules:
+            raise VerifyError(
+                f"Detect It Easy {relative} rules are incomplete: "
+                f"expected exactly {expected_rules}, found {rule_count}"
+            )
+
+    artifact = component["targets"][target]
+    dependencies = component.get("sourceDependencies")
+    dependency_labels = artifact.get("sourceDependencies")
+    if not isinstance(dependencies, dict) or not isinstance(dependency_labels, list):
+        raise VerifyError("Detect It Easy source dependency lock is missing")
+    expected_attribution_count = 0
+    for label in dependency_labels:
+        dependency = dependencies.get(label)
+        if not isinstance(dependency, dict):
+            raise VerifyError(f"Detect It Easy source dependency is missing: {label!r}")
+        specification = dependency.get("qtAttributions")
+        if specification is None:
+            continue
+        if not isinstance(specification, dict):
+            raise VerifyError(f"Detect It Easy Qt attribution lock is invalid: {label}")
+        expected_count = specification.get("count")
+        if (
+            specification.get("memberName") != "qt_attribution.json"
+            or not isinstance(expected_count, int)
+            or expected_count <= 0
+        ):
+            raise VerifyError(f"Detect It Easy Qt attribution lock is invalid: {label}")
+        attribution_directory = (
+            target_dir / "licenses" / "die-qt-attributions" / label
+        )
+        attribution_files = [
+            path
+            for path in attribution_directory.rglob("qt_attribution.json")
+            if path.is_file()
+        ]
+        if len(attribution_files) != expected_count:
+            raise VerifyError(
+                f"Detect It Easy {label} attribution set is incomplete: "
+                f"expected {expected_count}, found {len(attribution_files)}"
+            )
+        expected_license_files: set[PurePosixPath] = set()
+        for attribution_file in attribution_files:
+            attribution_relative = PurePosixPath(
+                attribution_file.relative_to(attribution_directory).as_posix()
+            )
+            expected_license_files.update(
+                qt_attribution_license_references(
+                    attribution_relative, attribution_file
+                )
+            )
+        license_directory_value = specification.get("licenseDirectory")
+        expected_module_license_count = specification.get("licenseFileCount")
+        if (
+            license_directory_value is not None
+            or expected_module_license_count is not None
+        ):
+            if (
+                not isinstance(license_directory_value, str)
+                or not isinstance(expected_module_license_count, int)
+                or expected_module_license_count <= 0
+            ):
+                raise VerifyError(
+                    f"Detect It Easy Qt module license lock is invalid: {label}"
+                )
+            license_directory = PurePosixPath(license_directory_value)
+            if (
+                license_directory.is_absolute()
+                or ".." in license_directory.parts
+                or any(part in {"", "."} for part in license_directory.parts)
+            ):
+                raise VerifyError(
+                    f"Detect It Easy Qt module license path is invalid: {label}"
+                )
+            module_license_root = attribution_directory.joinpath(
+                *license_directory.parts
+            )
+            module_license_files = {
+                PurePosixPath(path.relative_to(attribution_directory).as_posix())
+                for path in module_license_root.rglob("*")
+                if path.is_file()
+            }
+            if len(module_license_files) != expected_module_license_count:
+                raise VerifyError(
+                    f"Detect It Easy {label} Qt module license set is incomplete: "
+                    f"expected {expected_module_license_count}, "
+                    f"found {len(module_license_files)}"
+                )
+            expected_license_files.update(module_license_files)
+        for relative in expected_license_files:
+            license_file = attribution_directory.joinpath(*relative.parts)
+            if license_file.is_symlink() or not license_file.is_file():
+                raise VerifyError(
+                    f"Detect It Easy {label} Qt attribution license is missing: "
+                    f"{relative.as_posix()}"
+                )
+            if license_file.stat().st_size <= 0:
+                raise VerifyError(
+                    f"Detect It Easy {label} Qt attribution license is empty: "
+                    f"{relative.as_posix()}"
+                )
+        actual_license_files = {
+            PurePosixPath(path.relative_to(attribution_directory).as_posix())
+            for path in attribution_directory.rglob("*")
+            if path.is_file() and path.name != "qt_attribution.json"
+        }
+        if actual_license_files != expected_license_files:
+            raise VerifyError(
+                f"Detect It Easy {label} Qt attribution license set differs; "
+                f"missing={sorted(path.as_posix() for path in expected_license_files - actual_license_files)}, "
+                f"unexpected={sorted(path.as_posix() for path in actual_license_files - expected_license_files)}"
+            )
+        expected_attribution_count += expected_count
+    attribution_root = target_dir / "licenses" / "die-qt-attributions"
+    actual_attribution_count = sum(
+        1
+        for path in attribution_root.rglob("qt_attribution.json")
+        if path.is_file()
+    )
+    if actual_attribution_count != expected_attribution_count:
+        raise VerifyError(
+            "Detect It Easy bundle contains an unexpected Qt attribution set"
+        )
+
+    if target.startswith("windows-"):
+        for name in artifact["runtimeFiles"]:
+            runtime = target_dir / "die" / name
+            if not runtime.is_file():
+                raise VerifyError(f"Detect It Easy runtime is missing: {name}")
+            verify_machine(runtime, target)
+    elif target.startswith("linux-"):
+        runtime_names = list(artifact["runtimeFiles"])
+        runtime_names.extend(
+            item["destination"] for item in artifact["icuRuntime"]["runtimeFiles"]
+        )
+        for name in runtime_names:
+            runtime = target_dir / "die" / name
+            if not runtime.is_file():
+                raise VerifyError(f"Detect It Easy runtime is missing: {name}")
+            verify_machine(runtime, target)
+    else:
+        version = artifact["frameworkVersion"]
+        for name in artifact["frameworks"]:
+            runtime = (
+                target_dir
+                / "Frameworks"
+                / f"{name}.framework"
+                / "Versions"
+                / version
+                / name
+            )
+            if not runtime.is_file():
+                raise VerifyError(f"Detect It Easy framework is missing: {name}")
+            verify_machine(runtime, target)
 
 
 def run_smoke_checks(target_dir: Path, target: str) -> None:
     environment = os.environ.copy()
+    # Do not let caller-controlled loaders, injected libraries, or Qt/QML search
+    # paths make an incomplete bundle appear healthy (or execute foreign code).
+    for name in list(environment):
+        if name.startswith(("LD_", "DYLD_", "QT_", "QML")):
+            environment.pop(name, None)
     for name in (
         "ADB_SERVER_SOCKET",
         "ANDROID_ADB_SERVER_ADDRESS",
@@ -362,6 +659,8 @@ def run_smoke_checks(target_dir: Path, target: str) -> None:
     environment["PATH"] = os.pathsep.join(
         [str(target_dir), "/usr/bin", "/bin"] if os.name != "nt" else [str(target_dir)]
     )
+    if target.startswith("linux-"):
+        environment["LD_LIBRARY_PATH"] = str(target_dir / "die")
     version_markers = expected_version_markers(target)
     for name, args in expected_programs(target).items():
         file_path = target_dir / name
@@ -398,6 +697,35 @@ def run_smoke_checks(target_dir: Path, target: str) -> None:
             (line.strip() for line in result.stdout.splitlines() if line.strip()), "ready"
         )
         print(f"{name}: {first_line[:200]}")
+
+    diec = target_dir / "die" / (
+        "diec.exe" if target.startswith("windows-") else "diec"
+    )
+    die_scan = subprocess.run(
+        [str(diec), "-D", str(target_dir / "die" / "db"), "-j", str(diec)],
+        cwd=target_dir,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        die_payload = json.loads(die_scan.stdout)
+    except json.JSONDecodeError as error:
+        raise VerifyError(
+            "Detect It Easy failed to return JSON with its bundled database: "
+            f"{die_scan.stdout[:500]} {die_scan.stderr[:500]}"
+        ) from error
+    if die_scan.returncode != 0 or not isinstance(die_payload, dict):
+        raise VerifyError(
+            "Detect It Easy failed to scan with its bundled database: "
+            f"{die_scan.stderr[:1000]}"
+        )
 
     verify_ffmpeg_capabilities(
         target_dir / ("ffmpeg.exe" if target.startswith("windows-") else "ffmpeg"),

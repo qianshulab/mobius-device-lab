@@ -1,6 +1,6 @@
 [package]
 name = "mobius-device-lab"
-version = "0.2.0"
+version = "0.3.0"
 description = "A cross-platform mobile device operations workbench"
 authors = ["Mobius Device Lab"]
 edition = "2021"

@@ -573,6 +573,55 @@ pub struct PackageIcon {
     pub size_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PackageProtectionStatus {
+    Detected,
+    NotDetected,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageProtectionCategory {
+    Packer,
+    Protector,
+    Obfuscator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageProtectionConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageProtectionFinding {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
+    pub category: PackageProtectionCategory,
+    pub confidence: PackageProtectionConfidence,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageProtectionAnalysis {
+    pub status: PackageProtectionStatus,
+    pub engine: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    pub findings: Vec<PackageProtectionFinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scanned_entries: Option<u64>,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnalyzeMobilePackageRequest {
@@ -606,6 +655,8 @@ pub struct MobilePackageAnalysis {
     pub usage_descriptions: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<PackageIcon>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protection: Option<PackageProtectionAnalysis>,
     pub warnings: Vec<String>,
 }
 

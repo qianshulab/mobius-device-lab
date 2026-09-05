@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "bundleRevision": 5,
+  "bundleRevision": 6,
   "components": {
     "scrcpy": {
       "version": "4.1",
@@ -646,6 +646,432 @@
             "libwinpthread-1.dll",
             "msys-2.0.dll"
           ]
+        }
+      }
+    },
+    "diec": {
+      "version": "3.21",
+      "license": "MIT",
+      "projectUrl": "https://github.com/horsicq/DIE-engine",
+      "source": {
+        "url": "https://github.com/horsicq/DIE-engine/releases/download/3.21/die_sourcecode_3.21.tar.gz",
+        "size": 36519616,
+        "sha256": "01bc8b06f21e25523b9bb871509e10bbbd00dcb5da25c6d713d5078311585a22",
+        "archive": "tar.gz",
+        "root": "die_sourcecode_3.21",
+        "fileName": "die-sourcecode-3.21.tar.gz"
+      },
+      "licenseFiles": [
+        {
+          "path": "LICENSE",
+          "destination": "licenses/die-LICENSE.txt"
+        },
+        {
+          "path": "XArchive/3rdparty/bzip2/src/LICENSE",
+          "destination": "licenses/die-bzip2-LICENSE.txt"
+        },
+        {
+          "path": "XArchive/3rdparty/lzfse/src/LICENSE",
+          "destination": "licenses/die-lzfse-LICENSE.txt"
+        },
+        {
+          "path": "XArchive/3rdparty/zlib/src/zlib.h",
+          "destination": "licenses/die-zlib-LICENSE.h.txt"
+        },
+        {
+          "path": "XCapstone/3rdparty/Capstone/src/LICENSE.TXT",
+          "destination": "licenses/die-capstone-LICENSE.txt"
+        },
+        {
+          "path": "XCapstone/3rdparty/Capstone/src/LICENSE_LLVM.TXT",
+          "destination": "licenses/die-capstone-LLVM-LICENSE.txt"
+        },
+        {
+          "path": "XCppfilt/3rdparty/cppfilt/src/cp-demangle.c",
+          "destination": "licenses/die-cppfilt-linking-notice.c.txt"
+        }
+      ],
+      "databaseValidation": {
+        "expectedTotalFiles": 2047,
+        "requiredFiles": [
+          "_init",
+          "APK/_init",
+          "DEX/_init",
+          "IPA/_init"
+        ],
+        "ruleDirectories": [
+          {
+            "path": "APK",
+            "expectedRuleFiles": 51
+          },
+          {
+            "path": "DEX",
+            "expectedRuleFiles": 28
+          }
+        ]
+      },
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/horsicq/DIE-engine/releases/download/3.21/die_win64_portable_3.21_x64.zip",
+          "size": 25197854,
+          "sha256": "078f2934f267392247f9c7b759a1c2457a48bc2000b25b80c2f129955ee4a3b9",
+          "archive": "zip",
+          "root": "die",
+          "fileName": "die-win64-portable-3.21.zip",
+          "executable": "diec.exe",
+          "database": "db",
+          "runtimeFiles": [
+            "Qt5Core.dll",
+            "Qt5Script.dll",
+            "msvcp140.dll",
+            "msvcp140_1.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll"
+          ],
+          "proprietaryRuntime": {
+            "name": "Microsoft Visual C++ v14 Runtime",
+            "version": "14.29.30153.0",
+            "license": "Microsoft proprietary redistributable",
+            "projectUrl": "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170",
+            "licenseUrl": "https://visualstudio.microsoft.com/license-terms/",
+            "redistributableListUrl": "https://learn.microsoft.com/en-us/visualstudio/releases/2019/redistribution",
+            "sourceAvailable": false,
+            "redistributionConstraint": "Redistribution is permitted only under the applicable Microsoft Visual Studio license terms; the release publisher must independently hold and verify those rights.",
+            "files": [
+              {
+                "path": "msvcp140.dll",
+                "size": 567328,
+                "sha256": "e0a22a594e148fa55ceef3e49969bfa77011a801267a0bd7805b681b593c9d0b"
+              },
+              {
+                "path": "msvcp140_1.dll",
+                "size": 25016,
+                "sha256": "768e0829decea713afb35a7de07e276f051581c8ff2c17e1bae9b07dd1445dd0"
+              },
+              {
+                "path": "vcruntime140.dll",
+                "size": 98336,
+                "sha256": "c179d8914ba8e57b2f8f4d6c101c2c550c7c6712a7f0f9920a97db340f9d9574"
+              },
+              {
+                "path": "vcruntime140_1.dll",
+                "size": 38448,
+                "sha256": "7cf38d20d00b6640d510eab70171e1c6f8fa2e42040832e17c7433ab61d94a8e"
+              }
+            ]
+          },
+          "sourceDependencies": [
+            "qtbase-5.15.2",
+            "qtscript-5.15.2"
+          ]
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/horsicq/DIE-engine/releases/download/3.21/die_3.21_portable_Ubuntu_20.04_amd64.tar.gz",
+          "size": 27429929,
+          "sha256": "4d85614dd169c0d23f52084f86e05a503c30429df5fb5ec14de50f23808bc2d4",
+          "archive": "tar.gz",
+          "root": "die_linux_portable/base",
+          "fileName": "die-3.21-portable-Ubuntu-20.04-amd64.tar.gz",
+          "executable": "diec",
+          "database": "db",
+          "runtimeFiles": [
+            "libQt5Core.so.5",
+            "libQt5Script.so.5"
+          ],
+          "sourceDependencies": [
+            "qtbase-5.12.8",
+            "qtscript-5.12.8",
+            "icu-66.1",
+            "icu-66.1-ubuntu-patches"
+          ],
+          "icuRuntime": {
+            "version": "66.1-2ubuntu2.1",
+            "license": "Unicode-DFS-2016 AND BSD-3-Clause",
+            "projectUrl": "https://launchpad.net/ubuntu/+source/icu/66.1-2ubuntu2.1",
+            "artifact": {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu66_66.1-2ubuntu2.1_amd64.deb",
+              "size": 8515480,
+              "sha256": "00d0de456134668f41bd9ea308a076bc0a6a805180445af8a37209d433f41efe",
+              "archive": "deb",
+              "root": "usr",
+              "fileName": "libicu66_66.1-2ubuntu2.1_amd64.deb",
+              "dataMember": {
+                "name": "data.tar.xz",
+                "size": 8514136,
+                "sha256": "a501fb5bd8ac43514dbedf8c170c177ee4fa35e3350af3ba85810327ae1df9e3"
+              }
+            },
+            "runtimeFiles": [
+              {
+                "path": "lib/x86_64-linux-gnu/libicudata.so.66.1",
+                "destination": "libicudata.so.66"
+              },
+              {
+                "path": "lib/x86_64-linux-gnu/libicui18n.so.66.1",
+                "destination": "libicui18n.so.66"
+              },
+              {
+                "path": "lib/x86_64-linux-gnu/libicuuc.so.66.1",
+                "destination": "libicuuc.so.66"
+              }
+            ],
+            "notice": "share/doc/libicu66/copyright"
+          }
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/horsicq/DIE-engine/releases/download/3.21/die_mac_qt6_3.21_arm64.pkg",
+          "size": 41179549,
+          "sha256": "9b6411f4976593988fbcdc8d1ed2fd8123996e4b9f4a43df6a841460c229794b",
+          "archive": "pkg",
+          "root": "pkg/Payload/Contents",
+          "fileName": "die-mac-qt6-3.21-arm64.pkg",
+          "executable": "MacOS/diec",
+          "database": "Resources/db",
+          "frameworkVersion": "A",
+          "frameworks": [
+            "QtConcurrent",
+            "QtQml",
+            "QtNetwork",
+            "QtCore5Compat",
+            "QtCore"
+          ],
+          "minimumMacos": "13.0",
+          "sourceDependencies": [
+            "qtbase-6.11.0",
+            "qtdeclarative-6.11.0",
+            "qt5compat-6.11.0"
+          ]
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/horsicq/DIE-engine/releases/download/3.21/die_mac_portable_3.21_x86_64.zip",
+          "size": 26331684,
+          "sha256": "18a02733c20bdd609ea24b9c4c0c4456416541cb6ad33e5ddef6fc2bd300b6d2",
+          "archive": "zip",
+          "root": "die.app/Contents",
+          "fileName": "die-mac-portable-3.21-x86_64.zip",
+          "skipInternalLinks": true,
+          "executable": "MacOS/diec",
+          "database": "Resources/db",
+          "frameworkVersion": "5",
+          "frameworks": [
+            "QtConcurrent",
+            "QtScript",
+            "QtCore"
+          ],
+          "minimumMacos": "10.13",
+          "sourceDependencies": [
+            "qtbase-5.15.2",
+            "qtscript-5.15.2"
+          ]
+        }
+      },
+      "sourceDependencies": {
+        "qtbase-5.12.8": {
+          "version": "5.12.8",
+          "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+          "projectUrl": "https://www.qt.io/",
+          "source": {
+            "url": "https://download.qt.io/archive/qt/5.12/5.12.8/submodules/qtbase-everywhere-src-5.12.8.tar.xz",
+            "size": 48482196,
+            "sha256": "19592fbd0a524a17c35e413988fe494251103619ef7dd49aecdf3170973aabd8",
+            "archive": "tar.xz",
+            "root": "qtbase-everywhere-src-5.12.8",
+            "fileName": "qtbase-everywhere-src-5.12.8.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE.LGPL3",
+              "destination": "licenses/die-qtbase-5.12.8-LICENSE.LGPL3.txt"
+            }
+          ],
+          "qtAttributions": {
+            "memberName": "qt_attribution.json",
+            "count": 38
+          }
+        },
+        "qtscript-5.12.8": {
+          "version": "5.12.8",
+          "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+          "projectUrl": "https://www.qt.io/",
+          "source": {
+            "url": "https://download.qt.io/archive/qt/5.12/5.12.8/submodules/qtscript-everywhere-src-5.12.8.tar.xz",
+            "size": 2634372,
+            "sha256": "c8c13582bab8562792fab29f574768ef9fb2cdd232c102228cc511dbfc4b1097",
+            "archive": "tar.xz",
+            "root": "qtscript-everywhere-src-5.12.8",
+            "fileName": "qtscript-everywhere-src-5.12.8.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE.LGPL3",
+              "destination": "licenses/die-qtscript-5.12.8-LICENSE.LGPL3.txt"
+            }
+          ],
+          "qtAttributions": {
+            "memberName": "qt_attribution.json",
+            "count": 3
+          }
+        },
+        "qtbase-5.15.2": {
+          "version": "5.15.2",
+          "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+          "projectUrl": "https://www.qt.io/",
+          "source": {
+            "url": "https://download.qt.io/archive/qt/5.15/5.15.2/submodules/qtbase-everywhere-src-5.15.2.tar.xz",
+            "size": 50179672,
+            "sha256": "909fad2591ee367993a75d7e2ea50ad4db332f05e1c38dd7a5a274e156a4e0f8",
+            "archive": "tar.xz",
+            "root": "qtbase-everywhere-src-5.15.2",
+            "fileName": "qtbase-everywhere-src-5.15.2.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE.LGPL3",
+              "destination": "licenses/die-qtbase-5.15.2-LICENSE.LGPL3.txt"
+            }
+          ],
+          "qtAttributions": {
+            "memberName": "qt_attribution.json",
+            "count": 40
+          }
+        },
+        "qtscript-5.15.2": {
+          "version": "5.15.2",
+          "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+          "projectUrl": "https://www.qt.io/",
+          "source": {
+            "url": "https://download.qt.io/archive/qt/5.15/5.15.2/submodules/qtscript-everywhere-src-5.15.2.tar.xz",
+            "size": 2663016,
+            "sha256": "a299715369afbd1caa4d7fa2875d442eab91adcaacafce54a36922442624673e",
+            "archive": "tar.xz",
+            "root": "qtscript-everywhere-src-5.15.2",
+            "fileName": "qtscript-everywhere-src-5.15.2.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE.LGPL3",
+              "destination": "licenses/die-qtscript-5.15.2-LICENSE.LGPL3.txt"
+            }
+          ],
+          "qtAttributions": {
+            "memberName": "qt_attribution.json",
+            "count": 3
+          }
+        },
+        "qtbase-6.11.0": {
+          "version": "6.11.0",
+          "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+          "projectUrl": "https://www.qt.io/",
+          "source": {
+            "url": "https://download.qt.io/archive/qt/6.11/6.11.0/submodules/qtbase-everywhere-src-6.11.0.tar.xz",
+            "size": 50502456,
+            "sha256": "231ad85979864d914dc9568a1b71c91d6cf20d7b2021d059103bf0eb51cb755e",
+            "archive": "tar.xz",
+            "root": "qtbase-everywhere-src-6.11.0",
+            "fileName": "qtbase-everywhere-src-6.11.0.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSES/LGPL-3.0-only.txt",
+              "destination": "licenses/die-qtbase-6.11.0-LICENSE.LGPL3.txt"
+            }
+          ],
+          "qtAttributions": {
+            "memberName": "qt_attribution.json",
+            "count": 76,
+            "licenseDirectory": "LICENSES",
+            "licenseFileCount": 38
+          }
+        },
+        "qtdeclarative-6.11.0": {
+          "version": "6.11.0",
+          "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+          "projectUrl": "https://www.qt.io/",
+          "source": {
+            "url": "https://download.qt.io/archive/qt/6.11/6.11.0/submodules/qtdeclarative-everywhere-src-6.11.0.tar.xz",
+            "size": 38694812,
+            "sha256": "4eece569431ddf8324e7d322fa27001916570b23df535f8fb28aba445eedfde9",
+            "archive": "tar.xz",
+            "root": "qtdeclarative-everywhere-src-6.11.0",
+            "fileName": "qtdeclarative-everywhere-src-6.11.0.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSES/LGPL-3.0-only.txt",
+              "destination": "licenses/die-qtdeclarative-6.11.0-LICENSE.LGPL3.txt"
+            }
+          ],
+          "qtAttributions": {
+            "memberName": "qt_attribution.json",
+            "count": 5,
+            "licenseDirectory": "LICENSES",
+            "licenseFileCount": 14
+          }
+        },
+        "qt5compat-6.11.0": {
+          "version": "6.11.0",
+          "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+          "projectUrl": "https://www.qt.io/",
+          "source": {
+            "url": "https://download.qt.io/archive/qt/6.11/6.11.0/submodules/qt5compat-everywhere-src-6.11.0.tar.xz",
+            "size": 14616240,
+            "sha256": "e62954646b2749723aa5c7db32faab407358734075590058a01e793382d4c63e",
+            "archive": "tar.xz",
+            "root": "qt5compat-everywhere-src-6.11.0",
+            "fileName": "qt5compat-everywhere-src-6.11.0.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSES/LGPL-3.0-only.txt",
+              "destination": "licenses/die-qt5compat-6.11.0-LICENSE.LGPL3.txt"
+            }
+          ],
+          "qtAttributions": {
+            "memberName": "qt_attribution.json",
+            "count": 1,
+            "licenseDirectory": "LICENSES",
+            "licenseFileCount": 8
+          }
+        },
+        "icu-66.1": {
+          "version": "66.1",
+          "license": "Unicode-DFS-2016 AND BSD-3-Clause",
+          "projectUrl": "https://icu.unicode.org/",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/icu/icu_66.1.orig.tar.gz",
+            "size": 24361305,
+            "sha256": "52a3f2209ab95559c1cf0a14f24338001f389615bf00e2585ef3dbc43ecf0a2e",
+            "archive": "tar.gz",
+            "root": "icu",
+            "fileName": "icu-66.1.orig.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE",
+              "destination": "licenses/die-icu-66.1-LICENSE.txt"
+            }
+          ],
+          "linkage": "shared"
+        },
+        "icu-66.1-ubuntu-patches": {
+          "version": "66.1-2ubuntu2.1",
+          "license": "Ubuntu source packaging and notices",
+          "projectUrl": "https://launchpad.net/ubuntu/+source/icu/66.1-2ubuntu2.1",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/icu/icu_66.1-2ubuntu2.1.debian.tar.xz",
+            "size": 29700,
+            "sha256": "b63e077678aa13eb06a6334455dc06a1a6e5e97087094f0ef17bbfcef3706b99",
+            "archive": "tar.xz",
+            "root": "debian",
+            "fileName": "icu-66.1-2ubuntu2.1.debian.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "copyright",
+              "destination": "licenses/die-icu-66.1-Ubuntu-copyright.txt"
+            }
+          ],
+          "linkage": "build-source"
         }
       }
     }

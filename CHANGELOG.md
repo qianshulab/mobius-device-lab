@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — Copy-first package analysis
+
+- Added offline APK/DEX protector, packer, and obfuscator signature detection with the reviewed Detect It Easy 3.21 CLI and rule database bundled for every release target.
+- Added three-state protection results (`detected`, `not detected`, and `inconclusive`) so missing tools, partial APK/DEX rule catalogs, non-APK scan contexts, timeouts, truncated output, invalid JSON, and engine failures never become false “not protected” conclusions.
+- Redesigned APK/IPA results around copyable application name, package or Bundle ID, version, build, ABI, file name, local path, and MD5 fields, plus one-click summary, permission, and protection-result copying.
+- Fixed overlapping package-analysis requests, stale install actions, duplicate iOS privacy entries, and unnecessary installed-app loading outside its tab. Android APK export is now a visible row action, and iOS app rows can copy their Bundle ID directly.
+- Kept user-started Android recordings active across page and device navigation until the user stops them or exits the application, with globally serialized start/stop state and the recording device named even after switching targets. Fixed read-only Shell presets to execute immediately, made remote folders open with one click, and kept file-target symbolic links selectable and downloadable.
+- Added real APK, browser interaction, full Rust test, lint, and four-platform tool-bundle verification coverage for this release.
+
 ## 0.2.0 — Bundled toolchain
 
 - Added verified per-platform bundles for ADB 37.0.0, scrcpy/client Server 4.1, a minimal LGPL FFmpeg 9.0.1 build, and AAPT2 9.4.0-15978811, so installed releases no longer require Android command-line tools on `PATH`.

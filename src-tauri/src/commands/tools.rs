@@ -1,7 +1,7 @@
 use super::blocking_api;
 use crate::{
     models::{ApiResult, ConfigureToolchainRequest, ToolHealth, ToolchainConfiguration},
-    runner::run_process_at,
+    runner::run_process_at_with_env,
     toolchain,
 };
 use std::time::Duration;
@@ -51,6 +51,14 @@ const TOOL_SPECS: &[ToolSpec] = &[
         install_hint: "The standalone AAPT2 analyzer is included with Mobius. Reinstall the application if it is unavailable.",
     },
     ToolSpec {
+        id: "diec",
+        name: "Detect It Easy",
+        version_args: Some(&["-v"]),
+        purpose: "Offline APK and DEX protector, packer and obfuscator signature analysis",
+        required: true,
+        install_hint: "The reviewed Detect It Easy CLI and signature database are included with Mobius. Reinstall the application if they are unavailable.",
+    },
+    ToolSpec {
         id: "ios",
         name: "go-ios",
         version_args: Some(&["version"]),
@@ -89,7 +97,11 @@ pub async fn get_tool_health() -> ApiResult<Vec<ToolHealth>> {
         let tools = TOOL_SPECS
             .iter()
             .map(|spec| {
-                let resolved = match toolchain::resolve_tool(spec.id) {
+                let resolved = match if spec.id == "diec" {
+                    toolchain::resolve_bundled_tool(spec.id)
+                } else {
+                    toolchain::resolve_tool(spec.id)
+                } {
                     Ok(resolved) => resolved,
                     Err(error) => {
                         return ToolHealth {
@@ -119,6 +131,16 @@ pub async fn get_tool_health() -> ApiResult<Vec<ToolHealth>> {
                     hint,
                 };
 
+                if spec.id == "diec"
+                    && toolchain::validate_bundled_die_database(&resolved.path).is_err()
+                {
+                    return common(
+                        None,
+                        "warning".into(),
+                        Some("The bundled Detect It Easy signature database is missing".into()),
+                    );
+                }
+
                 // The bundled SFTP entry point has a deterministic -V flag.
                 // A developer-selected OpenSSH scp fallback has no portable
                 // version flag, so keep it healthy after path validation.
@@ -135,7 +157,15 @@ pub async fn get_tool_health() -> ApiResult<Vec<ToolHealth>> {
                     .iter()
                     .map(|arg| (*arg).to_string())
                     .collect::<Vec<_>>();
-                match run_process_at(spec.id, &resolved.path, &args, VERSION_TIMEOUT, &[]) {
+                let environment = toolchain::bundled_tool_environment(spec.id, &resolved.path);
+                match run_process_at_with_env(
+                    spec.id,
+                    &resolved.path,
+                    &args,
+                    VERSION_TIMEOUT,
+                    &[],
+                    &environment,
+                ) {
                     Ok(output) if output.exit_code == Some(0) && !output.timed_out => {
                         let text = if output.stdout.is_empty() {
                             output.stderr

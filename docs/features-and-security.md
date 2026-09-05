@@ -22,10 +22,10 @@ Mobius 仅用于以下场景：
 
 ### 随包工具供应链
 
-- 正式安装包为每个目标平台提供 ADB 37.0.0、scrcpy/Server 4.1、最小 LGPL FFmpeg 9.0.1、AAPT2 9.4.0-15978811、go-ios 1.3.2-mobius.1 与 Mobius SSH/SFTP 0.2.0，不依赖用户的 Android 工具、OpenSSH 或 libimobiledevice `PATH`。
+- 正式安装包为每个目标平台提供 ADB 37.0.0、scrcpy/Server 4.1、最小 LGPL FFmpeg 9.0.1、AAPT2 9.4.0-15978811、Detect It Easy 3.21、go-ios 1.3.2-mobius.1 与 Mobius SSH/SFTP 0.2.0，不依赖用户的 Android 工具、APK 加固识别工具、OpenSSH 或 libimobiledevice `PATH`。
 - `packaging/toolchain.lock.json` 固定上游 HTTPS URL、版本、归档大小、SHA-256、源码提交和构建选项。构建脚本在解包前验证大小/哈希，并拒绝链接、设备节点、路径穿越、异常成员和超出上限的归档。
 - 每个目标目录生成覆盖所有文件的 `manifest.json`，记录组件、许可证、大小、SHA-256 和可执行位。发布 runner 还验证目标架构和程序版本；macOS 嵌套可执行文件签名后会刷新清单并再次验证。
-- 随包许可证目录保留目标对应 ADB/AAPT2 NOTICE、scrcpy 及便携依赖的许可/内嵌第三方声明、FFmpeg LGPL 与配置、Go 运行时许可、go-ios 与 Mobius SSH 的补丁/模块清单及依赖许可证。Release 另附完整的 scrcpy 及便携依赖、FFmpeg、go-ios/Go、Mobius SSH 模块锁定源码、链接索引与构建/重链脚本归档，并将它纳入总校验和。
+- 随包许可证目录保留目标对应 ADB/AAPT2 NOTICE、scrcpy 及便携依赖的许可/内嵌第三方声明、FFmpeg LGPL 与配置、Detect It Easy 所用 Qt attribution 的全部引用正文与模块许可证目录、Go 运行时许可、go-ios 与 Mobius SSH 的补丁/模块清单及依赖许可证。Release 另附完整的 scrcpy 及便携依赖、FFmpeg、go-ios/Go、Mobius SSH 模块锁定源码、链接索引与构建/重链脚本归档，并将它纳入总校验和。
 - go-ios 的公开 Mobius 补丁把本机转发与可选截图 HTTP 监听从所有网卡收紧到 `127.0.0.1`，并写入精确版本标识。USB 转发只接受经过随包来源和 `1.3.2-mobius.1` 版本双重核对的文件；用户覆盖版仍可用于非转发操作。
 - 已安装应用不会自动下载或静默升级工具。显式配置失效时只允许回到已审查的随包副本，不继续悄悄替换为未知 SDK/PATH 文件。
 
@@ -35,6 +35,8 @@ Mobius 仅用于以下场景：
 - 文件总大小、ZIP 条目数、实际解压字节数、plist、图标和 Mach-O 读取量均有上限。
 - IPA 只接受唯一的 `Payload/<App>.app/Info.plist` 根应用，图标与主程序搜索限制在同一 App 目录，避免误选扩展或嵌套 App。
 - APK 元数据优先由 `aapt2` 读取，再尝试 `apkanalyzer`；ZIP 级回退会在结果中明确标记，不能当作完整清单。
+- APK/DEX 壳、加固和混淆特征只由经哈希锁定的随包 Detect It Easy CLI 与规则库离线分析，不接受 PATH 中同名程序。调用使用参数数组、25 秒超时和 1 MiB 输出上限；超时、截断、异常退出、数据库缺失或 JSON 不完整一律返回“无法确定”，只有完整扫描的零命中才显示“未发现已知特征”。该结果是启发式匹配，不证明应用一定已加固或未加固。
+- 官方 Apple Silicon Detect It Easy 3.21 二进制的最低系统是 macOS 13。Mobius 主应用仍保留 macOS 12 下限；在 macOS 12 Apple Silicon 上解析引擎不可运行时，只影响该项特征扫描，界面明确显示“无法确定”。
 - MD5 是用户要求的文件标识和兼容字段，不应被当作软件真实性或供应链安全证明。
 - Android 安装与 iOS go-ios/`ideviceinstaller` 回退安装均使用参数数组调用，并完整服从设备现有的签名、配对、信任、越狱和 AppSync 验证条件。
 - 导出 Android App 时会同时处理 base/split APK，目标文件名和包名经过校验；覆盖已有文件必须显式选择。
@@ -87,7 +89,7 @@ Mobius 仅用于以下场景：
 - 完整的 scrcpy 安装（客户端 + 版本匹配的 Server）或 FFmpeg 不可用，或连续视频中断时，界面会明确降级到 `adb -s <serial> exec-out screencap -p` 的低频单帧 PNG 预览。单帧接口有 8 秒超时和 16 MiB 内联上限；页面隐藏时不请求新帧。
 - 键鼠交互仍由用户显式点击后打开的独立 scrcpy 窗口承担，它不是默认预览路径。
 - 截图先在设备生成受控临时 PNG，校验格式、尺寸与像素上限后，可写入系统剪贴板或用户选择的电脑目录。
-- 录屏使用受控参数和 `--time-limit 0` 在设备持续生成 MP4；开始后界面显示计时，用户点击同一按钮时发送正常中断以完成封装、拉取并校验容器标识。切换设备、离开页面或退出应用也会自动走同一停止与保存流程；结果中的时长是实测值。成功或失败都会尽力清理 Mobius 创建的设备临时文件。
+- 录屏使用受控参数和 `--time-limit 0` 在设备持续生成 MP4；开始后界面显示计时，切换设备或离开页面不会擅自终止，用户回到工作台点击停止时才发送正常中断以完成封装、拉取并校验容器标识。退出应用会统一停止并收尾仍受管的录屏；结果中的时长是实测值。成功或失败都会尽力清理 Mobius 创建的设备临时文件。
 - 电脑端默认目录由设置页配置；未配置时保存操作会要求用户明确选择目录。
 
 ### Frida Server

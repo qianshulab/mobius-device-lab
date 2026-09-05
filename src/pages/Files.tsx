@@ -226,7 +226,6 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
     }
     setLoading(true);
     setFileError(undefined);
-    setSelected(undefined);
     try {
       const result = loadPlatform === "android"
         ? await api.files(deviceId, normalizedPath)
@@ -242,6 +241,7 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
       setEntries(loadPlatform === "ios"
         ? result.map((entry) => ({ ...entry, path: logicalRemoteChildPath(normalizedPath, entry.name) }))
         : result);
+      setSelected(undefined);
       setPath(normalizedPath);
       setPathInput(normalizedPath);
     } catch (error) {
@@ -557,7 +557,7 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
     <div className="page files-page">
       <div className="page-heading">
         <div><span className="eyebrow">REMOTE FILE SYSTEM</span><h1>文件</h1><p>{activeDevice.name} · {activeDevice.platform === "android" ? "ADB Shell 可访问范围" : `SSH ${iosSession?.username}@${iosSession?.sshHost}:${iosSession?.sshPort} · ${iosSession?.authMode === "password" ? "密码" : "私钥"}认证`}</p></div>
-        <div className="heading-actions"><Button icon={<ArrowDownToLine size={15} />} disabled={!selectedEntry || selectedEntry.kind !== "file"} onClick={() => { if (!selectedEntry || selectedEntry.kind !== "file") return; setOverwrite(false); setTransfer("download"); setRemotePath(selectedEntry.path); }}>下载</Button><Button icon={<ArrowUpFromLine size={15} />} onClick={() => { setOverwrite(false); setTransfer("upload"); setRemotePath(path); }}>上传</Button><Button variant="primary" icon={<Plus size={15} />} onClick={() => setNewFolder(true)}>新建目录</Button>{activeDevice.platform === "ios" && <Button variant="ghost" icon={<CircleStop size={14} />} onClick={() => void stopIosSession()}>断开 SSH</Button>}</div>
+        <div className="heading-actions"><Button icon={<ArrowDownToLine size={15} />} disabled={!selectedEntry || !["file", "link"].includes(selectedEntry.kind)} onClick={() => { if (!selectedEntry || !["file", "link"].includes(selectedEntry.kind)) return; setOverwrite(false); setTransfer("download"); setRemotePath(selectedEntry.path); }}>{selectedEntry?.kind === "link" ? "下载链接目标" : "下载"}</Button><Button icon={<ArrowUpFromLine size={15} />} onClick={() => { setOverwrite(false); setTransfer("upload"); setRemotePath(path); }}>上传</Button><Button variant="primary" icon={<Plus size={15} />} onClick={() => setNewFolder(true)}>新建目录</Button>{activeDevice.platform === "ios" && <Button variant="ghost" icon={<CircleStop size={14} />} onClick={() => void stopIosSession()}>断开 SSH</Button>}</div>
       </div>
 
       <Panel className="file-manager-panel">
@@ -578,12 +578,12 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
         <div className="data-table file-table">
           <div className="data-row data-head"><span>名称</span><span>大小</span><span>修改时间</span><span>权限 / 所有者</span><span /></div>
           {loading && !entries.length ? <div className="file-loading"><LoaderCircle className="spin" size={20} />正在读取目录…</div> : filtered.map((entry) => (
-            <div className={`data-row ${selected === entry.path ? "selected" : ""}`} role="button" tabIndex={0} key={entry.path} onClick={() => setSelected(entry.path)} onDoubleClick={() => (entry.kind === "directory" || entry.kind === "link") && load(entry.path)} onKeyDown={(event) => { if (event.key === "Enter") entry.kind === "directory" || entry.kind === "link" ? void load(entry.path) : setSelected(entry.path); }}>
+            <div className={`data-row ${selected === entry.path ? "selected" : ""}`} role="button" tabIndex={0} key={entry.path} onClick={() => entry.kind === "directory" ? void load(entry.path) : setSelected(entry.path)} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; setSelected(entry.path); if (entry.kind === "directory" || entry.kind === "link") void load(entry.path); }}>
               <span className="file-name" title={entry.linkTarget ? `链接到 ${entry.linkTarget}` : entry.name}>{fileIcon(entry)}<strong>{entry.name}</strong>{entry.kind === "directory" && <StatusBadge>目录</StatusBadge>}{entry.kind === "link" && <StatusBadge tone="info">链接</StatusBadge>}</span>
               <span>{entry.kind === "directory" ? "—" : formatBytes(entry.size)}</span>
               <span>{entry.modified ?? "—"}</span>
               <span><code>{entry.permissions ?? "—"}</code><small>{entry.owner ?? ""}</small></span>
-              <span className="row-actions"><button className="icon-button danger-icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(entry); }} aria-label={`删除 ${entry.name}`}><Trash2 size={15} /></button></span>
+              <span className="row-actions">{entry.kind === "link" && <button className="icon-button" title={`尝试打开链接 ${entry.name}`} aria-label={`尝试打开链接 ${entry.name}`} onClick={(event) => { event.stopPropagation(); setSelected(entry.path); void load(entry.path); }}><FolderOpen size={15} /></button>}<button className="icon-button danger-icon" onClick={(e) => { e.stopPropagation(); setDeleteTarget(entry); }} aria-label={`删除 ${entry.name}`}><Trash2 size={15} /></button></span>
             </div>
           ))}
           {!loading && !filtered.length && <EmptyState icon={<FolderOpen size={27} />} title={search ? "没有匹配项目" : "目录为空"} detail={search ? "清除筛选词后查看全部项目。" : "可以上传文件或在此创建新目录。"} />}

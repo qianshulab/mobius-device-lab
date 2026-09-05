@@ -152,13 +152,75 @@ license texts, build options, and the Windows native-timing patch are distribute
 with each release. The Windows build records its compiler and PE import list and
 rejects external MinGW runtime DLL dependencies.
 
+Detect It Easy 3.21 (diec and signature database)
+-------------------------------------------------
+Copyright (c) 2012-2026 hors <horsicq@gmail.com>
+License: MIT, with separately licensed embedded portions
+Project: https://github.com/horsicq/DIE-engine
+
+Mobius ships only the console scanner, its signature database, and the shared
+runtime files required by that scanner from the hash-locked official release
+for each target. The exact Detect It Easy source accompanies the release. Its
+MIT license and the upstream notices for the embedded bzip2, LZFSE, zlib,
+Capstone/LLVM and libiberty demangler code are retained in each target bundle.
+
+Qt runtime used by Detect It Easy
+---------------------------------
+Copyright (C) The Qt Company Ltd. and other contributors
+License: GNU Lesser General Public License 3.0, or the applicable alternative
+GPL terms identified by each upstream module
+Project: https://www.qt.io/
+
+The official Detect It Easy builds dynamically link Qt 5.12.8 on Linux,
+Qt 5.15.2 on Windows and macOS x86_64, and Qt 6.11.0 on macOS arm64. Mobius
+keeps only the shared modules used by diec. They remain separate, replaceable
+files; an ABI-compatible modified Qt build can be substituted. Exact complete
+source archives for every distributed Qt module and the LGPL text are included
+in the companion source archive. Every `qt_attribution.json` present in those
+exact module sources, every referenced `LicenseFile` / `LicenseFiles` /
+`CopyrightFile`, and the complete module `LICENSES/` catalog where upstream
+provides one are copied verbatim into each applicable target's
+`licenses/die-qt-attributions/` tree and the companion archive. The verifier
+rejects missing or dangling references. The macOS arm64 upstream build requires
+macOS 13 or newer; the rest of Mobius retains its macOS 12 application floor.
+
+ICU 66.1 (Linux Detect It Easy runtime)
+---------------------------------------
+Copyright (C) Unicode, Inc. and other contributors
+License: Unicode-DFS-2016 and separately identified permissive terms
+Project: https://icu.unicode.org/
+
+The upstream Linux Qt 5.12.8 build requires the ICU 66 ABI, which is no longer
+present on newer distributions. Mobius therefore ships only libicudata,
+libicui18n and libicuuc from Ubuntu's signed 66.1-2ubuntu2.1 package. The exact
+upstream source, Ubuntu packaging patches and package copyright file accompany
+the release. Other Qt dependencies retain stable system ABIs and are not copied.
+
+Microsoft Visual C++ runtime (Windows Detect It Easy distribution)
+------------------------------------------------------------------
+Copyright (C) Microsoft Corporation
+Version: 14.29.30153.0
+License: Microsoft proprietary redistributable terms
+Terms: https://visualstudio.microsoft.com/license-terms/
+Visual Studio 2019 REDIST list:
+https://learn.microsoft.com/en-us/visualstudio/releases/2019/redistribution
+Redistribution guidance:
+https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170
+
+The required adjacent runtime DLLs are copied unmodified from the hash-locked
+official Detect It Easy Windows portable archive and recorded in the per-file
+manifest and provenance record. They are not open source and no source is
+offered for them. Microsoft states that redistribution is limited to users with
+the applicable Visual Studio license; the release publisher must independently
+hold and verify those rights before publishing the Windows package.
+
 Source and relinking material
 -----------------------------
 Every Release includes Mobius-Device-Lab_<version>_third-party-sources.tar.xz.
 It contains the complete, hash-locked upstream sources listed above, the exact
 license and NOTICE files, the go-ios patch, scrcpy's upstream build scripts,
-the FFmpeg Windows patch, Mobius preparation/verification scripts, and
-packaging/SCRCPY_REBUILD.md.
+the FFmpeg Windows patch, Detect It Easy and exact Qt module sources, Mobius
+preparation/verification scripts, and packaging/SCRCPY_REBUILD.md.
 SOURCE_INDEX.json records target linkage and SHA256SUMS.txt covers every other
 file in the archive.
 

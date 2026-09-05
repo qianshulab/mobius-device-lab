@@ -7,22 +7,82 @@ import type { ActivityItem, AndroidScreenRecordingSession, AndroidScreenStream, 
 
 type ActiveRecording = AndroidScreenRecordingSession & { deviceName: string };
 
-let retainedRecordingSession: ActiveRecording | undefined;
-const recordingSessionSubscribers = new Set<(session: ActiveRecording | undefined) => void>();
+interface RecordingTarget {
+  serial: string;
+  deviceName: string;
+  rooted: boolean;
+}
+
+type RecordingRuntimeState =
+  | { phase: "idle" }
+  | { phase: "starting"; target: RecordingTarget }
+  | { phase: "recording"; session: ActiveRecording }
+  | { phase: "stopping"; session: ActiveRecording };
+
+let recordingRuntimeState: RecordingRuntimeState = { phase: "idle" };
+let recordingStartRequest: Promise<ActiveRecording | undefined> | undefined;
+const recordingStateSubscribers = new Set<(state: RecordingRuntimeState) => void>();
 const recordingStopRequests = new Map<string, Promise<MediaCaptureResult>>();
 
-function publishRecordingSession(session: ActiveRecording | undefined) {
-  retainedRecordingSession = session;
-  recordingSessionSubscribers.forEach((subscriber) => subscriber(session));
+function publishRecordingState(state: RecordingRuntimeState) {
+  recordingRuntimeState = state;
+  recordingStateSubscribers.forEach((subscriber) => subscriber(state));
+}
+
+function clearMatchingRecordingStart(target: RecordingTarget) {
+  const current = recordingRuntimeState;
+  if (current.phase === "starting" && current.target.serial === target.serial) publishRecordingState({ phase: "idle" });
+}
+
+function requestRecordingStart(target: RecordingTarget, resolveDirectory: () => Promise<string | null | undefined>) {
+  if (recordingStartRequest) return recordingStartRequest;
+  if (recordingRuntimeState.phase !== "idle") {
+    return Promise.resolve(recordingRuntimeState.phase === "recording" || recordingRuntimeState.phase === "stopping" ? recordingRuntimeState.session : undefined);
+  }
+
+  publishRecordingState({ phase: "starting", target });
+  const request = (async () => {
+    try {
+      const directory = await resolveDirectory();
+      if (!directory) {
+        clearMatchingRecordingStart(target);
+        return undefined;
+      }
+      const started = await api.startAndroidScreenRecording(target.serial, directory, 8_000_000, target.rooted);
+      if (!started.success) throw new Error(started.message);
+      const session: ActiveRecording = { ...started, deviceName: target.deviceName };
+      publishRecordingState({ phase: "recording", session });
+      return session;
+    } catch (error) {
+      clearMatchingRecordingStart(target);
+      throw error;
+    }
+  })();
+  recordingStartRequest = request;
+  const clearRequest = () => { if (recordingStartRequest === request) recordingStartRequest = undefined; };
+  void request.then(clearRequest, clearRequest);
+  return request;
 }
 
 function requestRecordingStop(session: ActiveRecording) {
   const existing = recordingStopRequests.get(session.sessionId);
   if (existing) return existing;
+  if (recordingRuntimeState.phase === "recording" && recordingRuntimeState.session.sessionId === session.sessionId) {
+    publishRecordingState({ phase: "stopping", session });
+  }
   const request = api.stopAndroidScreenRecording(session.serial, session.sessionId)
     .then((result) => {
       if (!result.success) throw new Error(result.message);
+      if ((recordingRuntimeState.phase === "recording" || recordingRuntimeState.phase === "stopping") && recordingRuntimeState.session.sessionId === session.sessionId) {
+        publishRecordingState({ phase: "idle" });
+      }
       return result;
+    })
+    .catch((error) => {
+      if ((recordingRuntimeState.phase === "recording" || recordingRuntimeState.phase === "stopping") && recordingRuntimeState.session.sessionId === session.sessionId) {
+        publishRecordingState({ phase: "recording", session });
+      }
+      throw error;
     })
     .finally(() => recordingStopRequests.delete(session.sessionId));
   recordingStopRequests.set(session.sessionId, request);
@@ -58,8 +118,7 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
   const [search, setSearch] = useState("");
   const [deviceManagerOpen, setDeviceManagerOpen] = useState(false);
   const [mediaBusy, setMediaBusy] = useState<"clipboard" | "screenshot">();
-  const [recordingSession, setRecordingSession] = useState<ActiveRecording | undefined>(() => retainedRecordingSession);
-  const [recordingBusy, setRecordingBusy] = useState<"starting" | "stopping">();
+  const [recordingState, setRecordingState] = useState<RecordingRuntimeState>(() => recordingRuntimeState);
   const [recordingElapsed, setRecordingElapsed] = useState(0);
   const [screenFrame, setScreenFrame] = useState<ScreenFrame>();
   const [screenFrameBusy, setScreenFrameBusy] = useState(false);
@@ -76,10 +135,6 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
   const streamRequestRef = useRef(0);
   const liveStreamImageRef = useRef<HTMLImageElement>(null);
   const iosCapabilityRequestRef = useRef(0);
-  const recordingSessionRef = useRef<ActiveRecording | undefined>(retainedRecordingSession);
-  const recordingGenerationRef = useRef(0);
-  const recordingTransitionRef = useRef(false);
-  const recordingMountedRef = useRef(false);
   const filtered = useMemo(() => devices.filter((device) => {
     const matchesPlatform = filter === "all" || device.platform === filter;
     const query = search.toLowerCase();
@@ -116,18 +171,17 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
     : screenFrame ? { width: screenFrame.width, height: screenFrame.height } : undefined;
   const contentIsLandscape = !!previewDimensions && previewDimensions.width > previewDimensions.height;
   const previewAspectRatio = "9 / 20";
+  const recordingSession = recordingState.phase === "recording" || recordingState.phase === "stopping" ? recordingState.session : undefined;
+  const recordingBusy = recordingState.phase === "starting" ? "starting" : recordingState.phase === "stopping" ? "stopping" : undefined;
+  const recordingDeviceName = recordingState.phase === "starting" ? recordingState.target.deviceName : recordingSession?.deviceName;
+  const recordingRuntimeActive = recordingState.phase !== "idle";
 
   useEffect(() => {
-    recordingMountedRef.current = true;
-    const updateSession = (session: ActiveRecording | undefined) => {
-      recordingSessionRef.current = session;
-      setRecordingSession(session);
-    };
-    recordingSessionSubscribers.add(updateSession);
-    updateSession(retainedRecordingSession);
+    const updateState = (state: RecordingRuntimeState) => setRecordingState(state);
+    recordingStateSubscribers.add(updateState);
+    updateState(recordingRuntimeState);
     return () => {
-      recordingMountedRef.current = false;
-      recordingSessionSubscribers.delete(updateSession);
+      recordingStateSubscribers.delete(updateState);
     };
   }, []);
 
@@ -141,39 +195,6 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
     const timer = window.setInterval(updateElapsed, 1000);
     return () => window.clearInterval(timer);
   }, [recordingSession]);
-
-  useEffect(() => {
-    const selectedSerial = activeDevice?.id;
-    return () => {
-      recordingGenerationRef.current += 1;
-      const session = recordingSessionRef.current;
-      if (!session || session.serial !== selectedSerial || recordingTransitionRef.current) return;
-      recordingTransitionRef.current = true;
-      if (recordingMountedRef.current) {
-        setRecordingBusy("stopping");
-      }
-      void requestRecordingStop(session)
-        .then((result) => {
-          if (retainedRecordingSession?.sessionId === session.sessionId) publishRecordingSession(undefined);
-          notify("success", "录屏已自动停止并保存", result.savedPath ?? result.message);
-          record("自动停止并保存录屏", `${session.deviceName} · ${result.savedPath ?? session.plannedSavedPath}`);
-          if (result.warnings?.length) {
-            notify("warning", "录屏已保存，但有提示", result.warnings.join("；"));
-            record("录屏保存提示", result.warnings.join("；"), "warning");
-          }
-        })
-        .catch((error) => {
-          if (!retainedRecordingSession || retainedRecordingSession.sessionId === session.sessionId) publishRecordingSession(session);
-          const message = error instanceof Error ? error.message : String(error);
-          notify("error", "自动停止录屏失败", message);
-          record("自动停止录屏失败", `${session.deviceName} · ${message}`, "error");
-        })
-        .finally(() => {
-          recordingTransitionRef.current = false;
-          if (recordingMountedRef.current) setRecordingBusy(undefined);
-        });
-    };
-  }, [activeDevice?.id, activeDevice?.state]);
 
   useEffect(() => {
     screenRequestRef.current += 1;
@@ -374,66 +395,34 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
   };
 
   const startRecording = async () => {
-    if (!activeDevice || !androidReady || mediaBusy || recordingSessionRef.current || recordingTransitionRef.current) return;
+    if (!activeDevice || !androidReady || mediaBusy || recordingRuntimeState.phase !== "idle" || recordingStartRequest) return;
     const target = activeDevice;
-    const generation = recordingGenerationRef.current;
-    recordingTransitionRef.current = true;
-    setRecordingBusy("starting");
     try {
-      const directory = await resolveMediaDirectory();
-      if (!directory) return;
-      if (generation !== recordingGenerationRef.current || !recordingMountedRef.current) return;
-      const started = await api.startAndroidScreenRecording(target.id, directory, 8_000_000, !!target.rooted);
-      if (!started.success) throw new Error(started.message);
-      const session: ActiveRecording = { ...started, deviceName: target.name };
-      publishRecordingSession(session);
-      if (generation !== recordingGenerationRef.current || !recordingMountedRef.current) {
-        try {
-          const result = await requestRecordingStop(session);
-          if (retainedRecordingSession?.sessionId === session.sessionId) publishRecordingSession(undefined);
-          notify("success", "录屏已自动停止并保存", result.savedPath ?? result.message);
-          record("自动停止并保存录屏", `${target.name} · ${result.savedPath ?? started.plannedSavedPath}`);
-          reportMediaWarnings(result.warnings, "录屏已保存");
-        } catch (error) {
-          if (!retainedRecordingSession || retainedRecordingSession.sessionId === session.sessionId) publishRecordingSession(session);
-          const message = error instanceof Error ? error.message : String(error);
-          notify("error", "自动停止录屏失败", `${message}；会话已保留，设备恢复后可再次停止。`);
-          record("自动停止录屏失败", `${target.name} · ${message}`, "error");
-        }
-        return;
-      }
+      const session = await requestRecordingStart({ serial: target.id, deviceName: target.name, rooted: !!target.rooted }, resolveMediaDirectory);
+      if (!session) return;
       notify("info", "录屏已开始", "完成后点击同一按钮停止并保存");
       record("开始设备录屏", `${target.name} · 用户停止时保存`, "running");
-      reportMediaWarnings(started.warnings, "录屏已开始");
+      reportMediaWarnings(session.warnings, "录屏已开始");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       notify("error", "启动设备录屏失败", message);
       record("启动设备录屏失败", `${target.name} · ${message}`, "error");
-    } finally {
-      recordingTransitionRef.current = false;
-      if (recordingMountedRef.current) setRecordingBusy(undefined);
     }
   };
 
   const stopRecording = async () => {
-    const session = recordingSessionRef.current;
-    if (!session || recordingTransitionRef.current) return;
-    recordingTransitionRef.current = true;
-    setRecordingBusy("stopping");
+    const current = recordingRuntimeState;
+    if (current.phase !== "recording") return;
+    const session = current.session;
     try {
       const result = await requestRecordingStop(session);
-      if (retainedRecordingSession?.sessionId === session.sessionId) publishRecordingSession(undefined);
       notify("success", "录屏已停止并保存到电脑", result.savedPath ?? result.message);
       record("停止并保存设备录屏", `${session.deviceName} · ${result.savedPath ?? session.plannedSavedPath}`);
       reportMediaWarnings(result.warnings, "录屏已保存");
     } catch (error) {
-      if (!retainedRecordingSession || retainedRecordingSession.sessionId === session.sessionId) publishRecordingSession(session);
       const message = error instanceof Error ? error.message : String(error);
       notify("error", "停止并保存录屏失败", `${message}；会话已保留，可重试。`);
       record("停止并保存设备录屏失败", `${session.deviceName} · ${message}`, "error");
-    } finally {
-      recordingTransitionRef.current = false;
-      if (recordingMountedRef.current) setRecordingBusy(undefined);
     }
   };
 
@@ -461,8 +450,8 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
         </div>
         <div className="screen-control-pane">
           <div className="screen-control-heading"><div><span>QUICK ACTIONS</span><strong>屏幕与媒体</strong></div><small>点击即可执行</small></div>
-          {activeDevice ? <div className={`screen-action-stack ${activeDevice.platform}`}>
-            {activeDevice.platform === "android" && <button disabled={!androidReady || !scrcpyReady} onClick={() => onAction("scrcpy")}>
+          {activeDevice || recordingRuntimeActive ? <div className={`screen-action-stack ${activeDevice?.platform ?? "android"}`}>
+            {activeDevice?.platform === "android" && <button disabled={!androidReady || !scrcpyReady} onClick={() => onAction("scrcpy")}>
               <MonitorSmartphone />
               <span><strong>键鼠控制</strong><small>{!androidReady ? "需要在线 Android 设备" : scrcpyReady ? "需要时打开交互窗口" : "需要配置 scrcpy"}</small></span>
               <ChevronRight />
@@ -477,9 +466,9 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
               <span><strong>截图保存到电脑</strong><small>{mediaBusy === "screenshot" ? "正在保存 PNG…" : screenReady ? mediaDirectory || "首次使用时选择保存目录" : "屏幕服务就绪后可用"}</small></span>
               <ChevronRight />
             </button>
-            {activeDevice.platform === "android" && <button disabled={!!recordingBusy || (!recordingSession && (!androidReady || !!mediaBusy))} onClick={() => void (recordingSession ? stopRecording() : startRecording())}>
+            {(activeDevice?.platform === "android" || recordingRuntimeActive) && <button disabled={!!recordingBusy || (recordingState.phase === "idle" && (!androidReady || !!mediaBusy))} onClick={() => void (recordingState.phase === "recording" ? stopRecording() : startRecording())}>
               {recordingBusy ? <LoaderCircle className="spin" /> : recordingSession ? <Pause /> : <Video />}
-              <span><strong>{recordingBusy === "stopping" ? "正在停止并保存…" : recordingBusy === "starting" ? "正在启动录屏…" : recordingSession ? "停止录屏" : "开始录屏"}</strong><small>{recordingBusy ? "请保持设备连接…" : recordingSession ? `已录制 ${recordingTime(recordingElapsed)} · 点击结束并保存` : mediaDirectory || "首次使用时选择保存目录"}</small></span>
+              <span><strong>{recordingBusy === "stopping" ? "正在停止并保存…" : recordingBusy === "starting" ? "正在启动录屏…" : recordingSession ? "停止录屏" : "开始录屏"}</strong><small>{recordingBusy ? `${recordingDeviceName ?? "已锁定设备"} · 请保持连接…` : recordingSession ? `${recordingSession.deviceName} · 已录制 ${recordingTime(recordingElapsed)} · 点击结束并保存` : mediaDirectory || "首次使用时选择保存目录"}</small></span>
               {recordingSession ? <StatusBadge tone="warning">REC {recordingTime(recordingElapsed)}</StatusBadge> : <ChevronRight />}
             </button>}
           </div> : <div className="screen-action-empty"><MonitorSmartphone size={26} /><strong>屏幕操作将在连接后启用</strong><span>Android 会自动启动内嵌 scrcpy；已配对 iOS 会显示屏幕采样。</span></div>}

@@ -156,6 +156,29 @@ export interface PackageSignature {
   sha256?: string;
 }
 
+export type PackageProtectionStatus = "detected" | "notDetected" | "inconclusive";
+export type PackageProtectionCategory = "packer" | "protector" | "obfuscator" | "other";
+export type PackageProtectionConfidence = "high" | "medium" | "low";
+
+export interface PackageProtectionFinding {
+  id: string;
+  name: string;
+  vendor?: string;
+  category: PackageProtectionCategory;
+  confidence: PackageProtectionConfidence;
+  evidence: string[];
+}
+
+export interface PackageProtectionAnalysis {
+  status: PackageProtectionStatus;
+  engine: string;
+  engineVersion?: string;
+  signatureSetVersion?: string;
+  findings: PackageProtectionFinding[];
+  scannedEntries?: number;
+  warnings: string[];
+}
+
 export interface PackageAnalysis {
   path: string;
   fileName: string;
@@ -172,6 +195,7 @@ export interface PackageAnalysis {
   permissions: PackagePermission[];
   components?: PackageComponent[];
   signature?: PackageSignature;
+  protection?: PackageProtectionAnalysis;
   iconDataUrl?: string;
   encrypted?: boolean;
   debuggable?: boolean;

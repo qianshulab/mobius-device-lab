@@ -18,6 +18,10 @@ from prepare_tool_bundle import (
     checked_artifact,
     download_locked,
     extract_locked_regular_member,
+    extract_locked_regular_members,
+    extract_locked_regular_members_named,
+    extract_locked_regular_tree,
+    qt_attribution_license_references,
     require_regular,
     safe_relative_path,
     sha256_file,
@@ -140,6 +144,45 @@ def source_records(lock: dict[str, Any]) -> list[dict[str, Any]]:
                 "targetBuildRequirements"
             ]
         records.append(record)
+
+    diec = components["diec"]
+    records.append(
+        {
+            "label": "diec",
+            "version": diec["version"],
+            "license": diec["license"],
+            "projectUrl": diec["projectUrl"],
+            "source": diec["source"],
+            "licenseFiles": diec["licenseFiles"],
+            "usedBy": all_targets,
+        }
+    )
+    die_targets = diec["targets"]
+    for label, dependency in sorted(diec["sourceDependencies"].items()):
+        used_by = sorted(
+            target
+            for target, target_value in die_targets.items()
+            if label in target_value["sourceDependencies"]
+        )
+        if not used_by:
+            raise BundleError(f"Unused Detect It Easy source dependency: {label}")
+        records.append(
+            {
+                "label": f"diec-{label}",
+                "version": dependency["version"],
+                "license": dependency["license"],
+                "projectUrl": dependency["projectUrl"],
+                "source": dependency["source"],
+                "licenseFiles": dependency["licenseFiles"],
+                "usedBy": used_by,
+                "linkage": {
+                    target: dependency.get("linkage", "shared")
+                    for target in used_by
+                },
+                "qtAttributions": dependency.get("qtAttributions"),
+                "qtAttributionDirectory": label,
+            }
+        )
     go_toolchain = components["go-ios"]["goToolchain"]
     records.append(
         {
@@ -169,6 +212,26 @@ def source_records(lock: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def binary_only_runtime_records(lock: dict[str, Any]) -> list[dict[str, Any]]:
+    windows = lock["components"]["diec"]["targets"]["windows-x86_64"]
+    proprietary = windows["proprietaryRuntime"]
+    return [
+        {
+            "name": proprietary["name"],
+            "version": proprietary["version"],
+            "license": proprietary["license"],
+            "projectUrl": proprietary["projectUrl"],
+            "licenseUrl": proprietary["licenseUrl"],
+            "redistributableListUrl": proprietary["redistributableListUrl"],
+            "usedBy": ["windows-x86_64"],
+            "sourceAvailable": False,
+            "redistributionConstraint": proprietary["redistributionConstraint"],
+            "files": proprietary["files"],
+            "containedIn": windows["url"],
+        }
+    ]
 
 
 def stage_sources_and_licenses(
@@ -232,6 +295,126 @@ def stage_sources_and_licenses(
             copy_regular(license_source, license_destination, f"{label} license")
             copied_licenses.append(destination_relative.as_posix())
 
+        copied_attributions: list[str] = []
+        copied_attribution_licenses: list[str] = []
+        attribution_specification = record.get("qtAttributions")
+        if attribution_specification is not None:
+            if not isinstance(attribution_specification, dict):
+                raise BundleError(f"{label}: invalid Qt attribution lock")
+            member_name = attribution_specification.get("memberName")
+            expected_count = attribution_specification.get("count")
+            attribution_directory = record.get("qtAttributionDirectory")
+            if (
+                member_name != "qt_attribution.json"
+                or not isinstance(expected_count, int)
+                or expected_count <= 0
+                or not isinstance(attribution_directory, str)
+            ):
+                raise BundleError(f"{label}: incomplete Qt attribution lock")
+            extracted_attributions = extract_locked_regular_members_named(
+                f"{label} source",
+                artifact,
+                member_name,
+                cache,
+                work / f"{label}-qt-attributions",
+            )
+            if len(extracted_attributions) != expected_count:
+                raise BundleError(
+                    f"{label}: expected {expected_count} Qt attribution files, "
+                    f"found {len(extracted_attributions)}"
+                )
+            attribution_root = safe_relative_path(attribution_directory)
+            if len(attribution_root.parts) != 1:
+                raise BundleError(f"{label}: invalid Qt attribution directory")
+            attribution_license_references = set()
+            for attribution_relative, attribution_source in extracted_attributions:
+                attribution_license_references.update(
+                    qt_attribution_license_references(
+                        attribution_relative, attribution_source
+                    )
+                )
+            extracted_attribution_licenses = extract_locked_regular_members(
+                f"{label} Qt attribution licenses",
+                artifact,
+                attribution_license_references,
+                cache,
+                work / f"{label}-qt-attribution-licenses",
+            )
+            module_license_files = {}
+            license_directory_value = attribution_specification.get(
+                "licenseDirectory"
+            )
+            expected_license_count = attribution_specification.get(
+                "licenseFileCount"
+            )
+            if (
+                license_directory_value is not None
+                or expected_license_count is not None
+            ):
+                if (
+                    not isinstance(license_directory_value, str)
+                    or not isinstance(expected_license_count, int)
+                    or expected_license_count <= 0
+                ):
+                    raise BundleError(f"{label}: incomplete Qt module license lock")
+                license_directory = safe_relative_path(license_directory_value)
+                module_license_files = extract_locked_regular_tree(
+                    f"{label} Qt module licenses",
+                    artifact,
+                    license_directory,
+                    cache,
+                    work / f"{label}-qt-module-licenses",
+                )
+                if len(module_license_files) != expected_license_count:
+                    raise BundleError(
+                        f"{label}: expected {expected_license_count} Qt module "
+                        f"license files, found {len(module_license_files)}"
+                    )
+            for attribution_relative, attribution_source in extracted_attributions:
+                destination_relative = Path(
+                    "licenses",
+                    "die-qt-attributions",
+                    attribution_root.name,
+                    *attribution_relative.parts,
+                )
+                attribution_destination = archive_root / destination_relative
+                if attribution_destination.exists():
+                    raise BundleError(
+                        f"Duplicate Qt attribution destination: {destination_relative}"
+                    )
+                copy_regular(
+                    attribution_source,
+                    attribution_destination,
+                    f"{label} Qt attribution",
+                )
+                copied_attributions.append(destination_relative.as_posix())
+            all_attribution_licenses = dict(module_license_files)
+            all_attribution_licenses.update(extracted_attribution_licenses)
+            for license_relative, license_source in sorted(
+                all_attribution_licenses.items(),
+                key=lambda item: item[0].as_posix(),
+            ):
+                destination_relative = Path(
+                    "licenses",
+                    "die-qt-attributions",
+                    attribution_root.name,
+                    *license_relative.parts,
+                )
+                attribution_destination = archive_root / destination_relative
+                if attribution_destination.exists():
+                    raise BundleError(
+                        "Duplicate Qt attribution license destination: "
+                        f"{destination_relative}"
+                    )
+                copy_regular(
+                    license_source,
+                    attribution_destination,
+                    f"{label} Qt attribution license",
+                )
+                copied_attribution_licenses.append(
+                    destination_relative.as_posix()
+                )
+
         index_entry = {
             "name": label,
             "version": record["version"],
@@ -243,6 +426,8 @@ def stage_sources_and_licenses(
             "usedBy": record["usedBy"],
             "linkage": record.get("linkage"),
             "licenseFiles": copied_licenses,
+            "qtAttributionFiles": copied_attributions,
+            "qtAttributionLicenseFiles": copied_attribution_licenses,
         }
         for metadata_key in ("patch", "targetPatches", "targetBuildRequirements"):
             if metadata_key in record:
@@ -393,6 +578,7 @@ def main() -> int:
                     "schemaVersion": 1,
                     "bundleRevision": lock["bundleRevision"],
                     "sources": source_index,
+                    "binaryOnlyRuntimes": binary_only_runtime_records(lock),
                     "androidPlatformToolsNotices": adb_notices,
                 },
                 indent=2,
@@ -430,6 +616,15 @@ Google's proprietary Platform Tools archives are not copied into this source
 package. Their official URLs, exact sizes and hashes are locked, and each target's
 verified NOTICE is included here. The prepare script independently compares every
 bundled portable ADB file byte-for-byte with Platform Tools 37.0.0 before packaging.
+
+Detect It Easy 3.21 and the exact Qt/ICU module sources used by its target
+packages are included. Linux also includes the matching Ubuntu ICU packaging
+patches. Every Qt module's source qt_attribution.json files are preserved both
+beside the source index and in each applicable target bundle. The Windows
+portable package contains proprietary Microsoft Visual C++
+v14 runtime DLLs; they have no corresponding source offer. Their exact hashes,
+official license links, and publisher redistribution constraint are recorded in
+SOURCE_INDEX.json and the lock instead of being represented as open source.
 
 SOURCE_INDEX.json maps every archived source and license to its target and linkage.
 SHA256SUMS.txt authenticates every other file in this archive.

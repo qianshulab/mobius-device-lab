@@ -10,7 +10,7 @@ React / TypeScript UI
         ▼
 Rust 命令边界 ── 输入校验 ── 会话资源归属
         │
-        ├── 包分析: ZIP / plist / Mach-O / 随包 AAPT2 / apkanalyzer 回退
+        ├── 包分析: ZIP / plist / Mach-O / 随包 AAPT2 / 随包 Detect It Easy (diec) / apkanalyzer 回退
         ├── Android: 随包 adb / scrcpy + scrcpy-server / 最小 FFmpeg / 用户提供的 frida-server
         └── iOS: 随包 go-ios / 随包 Mobius SSH/SFTP / libimobiledevice 回退
 ```
@@ -42,6 +42,7 @@ Rust 命令边界 ── 输入校验 ── 会话资源归属
 4. 长期运行的 GUI/Server/转码进程与会话创建的代理/映射由专门命令管理；退出时只清理仍属于本会话、且身份或整组状态仍匹配的资源。
 5. 返回值使用结构化成功/错误对象，界面不依赖本地化终端输出判断所有状态。
 6. APK/IPA 解析限制文件大小、归档条目数和实际解压字节数；图标和 Mach-O 只读取有界数据。
+7. APK 壳、加固与混淆特征只由随包 Detect It Easy 3.21 CLI 及其相邻规则库离线扫描，不接受 `PATH` 中的同名程序。调用有 25 秒上限，结果明确区分“发现特征”、“未发现已知特征”和“无法确定”；超时、截断、异常退出、规则库缺失或 JSON 不完整都不会被误报为“未加固”。
 
 高级 Android shell 是有意保留的例外：Rust 仍不会启动主机 shell，但提供的字符串会作为一个参数交给 `adb shell`，最终由设备 shell 解释。因此它必须始终被视为专家级高风险入口。
 
@@ -53,9 +54,9 @@ Rust 命令边界 ── 输入校验 ── 会话资源归属
 - 网络：优先实际 Wi-Fi/以太网、排除隧道和常见虚拟接口；在至多 4 个本机活动 RFC1918 `/24` 中进行有界 TCP 与 ADB 协议候选探测。
 - 隧道：ADB forward/reverse 的查看、创建与删除。
 - 文件：基于 ADB shell、push、pull。
-- 屏幕：连接后在“设备”页首屏默认启动精确 ADB 序列号的 scrcpy Server 连续视频。桌面宽度下将手机画面放在左侧竖向模块，右侧只保留交互、截图与录屏动作，下方紧凑表格负责设备选择；只有缺少完整 scrcpy/FFmpeg 或视频链路失败时才轮询单帧 PNG 降级。需要键鼠交互时显式启动独立 scrcpy 窗口。
+- 屏幕：连接后在“设备”页首屏默认启动精确 ADB 序列号的 scrcpy Server 连续视频。桌面宽度下将手机画面放在左侧竖向模块，右侧保留屏幕操作和连接入口，完整设备列表收纳到就地弹窗中；只有缺少完整 scrcpy/FFmpeg 或视频链路失败时才轮询单帧 PNG 降级。需要键鼠交互时显式启动独立 scrcpy 窗口。
 - 代理：Reverse 与系统代理分开，只有明确的设置动作才会修改 Android 全局代理。后端记录 `http_proxy`、host、port、排除列表与 PAC URL 的整组原始快照，用于变更检测与恢复。
-- 应用：APK 分析、安装、已安装应用枚举、base/split APK 导出，以及经包名和设备绑定的启动、强制停止、清除数据与卸载。清数据/卸载保护系统应用并在界面二次确认。
+- 应用：APK 元数据分析会同时运行随包 Detect It Easy 启发式特征扫描，并以三态结果呈现；另支持安装、已安装应用枚举、base/split APK 导出，以及经包名和设备绑定的启动、强制停止、清除数据与卸载。Android 列表把“导出 APK”作为行内显式按钮，“更多”只收纳清数据和卸载；两项破坏性操作保护系统应用并在界面二次确认。
 - 系统观察：确定性的只读命令在当前页执行并显示，重启单独确认；自定义命令进入设备 Shell。
 - 动态分析：提供 16.1.4、最新稳定版与自定义版本槽；用户选择匹配 ABI 的本地 `frida-server`，上传为不含 `frida` 的中性远端名；设备/主机端口独立配置并自动创建 forward。
 
@@ -77,7 +78,7 @@ Rust 命令边界 ── 输入校验 ── 会话资源归属
 侧栏按用户对象而不是底层命令分类：
 
 1. `工作台`：固定启动页，首屏展示 Android 内嵌 scrcpy 连续视频或 iOS 配对 screenshotr 采样画面；使用“紧凑纵向手机画面 + 屏幕操作 + 设备连接”布局。设备完整信息只在二级管理弹窗展示。
-2. `应用`：本地 APK/IPA 分析、安装、设备应用与导出。
+2. `应用`：本地 APK/IPA 分析、APK 三态加固特征扫描、安装、设备应用与行内导出。
 3. `文件`：远端文件浏览和传输。
 4. `网络`：Android 测试代理与 ADB forward/reverse；iOS USB go-ios（`iproxy` 回退）本机转发与 SSH `-L` / `-R` 双向回环隧道。
 5. `调试`：Frida、系统/进程、iOS go-ios 固定主机工具与高级 Shell。
@@ -89,7 +90,9 @@ Rust 命令边界 ── 输入校验 ── 会话资源归属
 
 Android 主画面使用选中 scrcpy 客户端报告的版本号启动对应 Server；发行/安装必须提供与该客户端匹配的 `scrcpy-server` 文件。Server 精确绑定 serial，关闭音频与控制通道，并通过随机 SCID 的 ADB reverse 将原始 H.264 只引到本机回环。FFmpeg 将它转为 MJPEG，Rust 在另一个 `127.0.0.1` 随机端口上，仅向路径、回环 Host、独立 128 位令牌，以及出现时属于允许清单的 Origin 都匹配的单个 WebView 请求提供不缓存视频。画面不经过 Tauri base64 IPC。
 
-每个 Android serial 同时只保留一个受管流和一个受管录屏。显式停止、重建、切换设备、页面销毁、客户端断开或应用退出都会尽力停止 scrcpy Server 与 FFmpeg，关闭 socket，移除该 SCID 的 reverse，并删除本会话生成的设备端 jar；仍在进行的录屏会先正常完成 MP4、保存到预定电脑路径再清理设备临时文件。外层手机窗口始终保持纵向比例；设备横屏时使用 `object-fit: contain` 在纵向窗口内完整显示，页面布局不随旋转跳变。缺少完整 scrcpy/FFmpeg 或链路中断时，前端才调用有界的 Android PNG 单帧接口作为低频降级。iOS 仍使用已配对 USB/网络连接的 screenshotr PNG 采样。
+每个 Android serial 同时只保留一个受管流和一个受管录屏，但两者的生命周期独立。投屏流在显式停止、重建、切换设备、页面销毁、客户端断开或应用退出时，会尽力停止 scrcpy Server 与 FFmpeg，关闭 socket，移除该 SCID 的 reverse，并删除本会话生成的设备端 jar。外层手机窗口始终保持纵向比例；设备横屏时使用 `object-fit: contain` 在纵向窗口内完整显示，页面布局不随旋转跳变。缺少完整 scrcpy/FFmpeg 或链路中断时，前端才调用有界的 Android PNG 单帧接口作为低频降级。iOS 仍使用已配对 USB/网络连接的 screenshotr PNG 采样。
+
+用户启动的 Android 录屏由 Rust 登记表持有，前端在页面重新挂载时重新附着到保留的会话。切换当前设备、离开工作台或销毁页面都不会自动结束录屏；只有用户点击“停止录屏”或整个应用退出时才会发送正常中断，完成 MP4、拉取到预定电脑路径，再清理设备临时文件。显式停止失败时保留会话以便重试；退出清理则对所有仍受管录屏尽力收尾。
 
 Android 内嵌视频不启用控制 socket；鼠标键盘操作仍由用户显式打开的 scrcpy 交互窗口承担。iOS 的高帧率录屏/操控需要单独、可验证的 WDA/MJPEG 类适配器，不会用重复截图替代。
 
@@ -114,25 +117,26 @@ UI 默认只创建 Reverse，不修改系统代理。只有用户明确选择“
 3. `ANDROID_HOME`、`ANDROID_SDK_ROOT` 及常见 Android SDK 目录。
 4. 系统 `PATH`。
 
-解析结果会标记为 `configured`、`bundled`、`sdk` 或 `path`，设置页展示实际路径和来源。失效的预览版显式路径可以回到已审查的随包副本，但不会进一步静默替换为未知 SDK/PATH 文件。健康检查的必需项为 `adb`、`scrcpy`、`ffmpeg`、`aapt2`、`ios`（go-ios）、`ssh` 与 `scp`；主机 Frida CLI、`apkanalyzer` 和 libimobiledevice 工具都不是发行包的核心依赖。
+解析结果会标记为 `configured`、`bundled`、`sdk` 或 `path`，设置页展示实际路径和来源。失效的预览版显式路径可以回到已审查的随包副本，但不会进一步静默替换为未知 SDK/PATH 文件。健康检查的必需项为 `adb`、`scrcpy`、`ffmpeg`、`aapt2`、`diec`、`ios`（go-ios）、`ssh` 与 `scp`；其中 `diec` 为随包专用解析器，只接受目标资源目录中的已审查 CLI 与相邻 `db`，不回退到用户配置或系统 `PATH`。主机 Frida CLI、`apkanalyzer` 和 libimobiledevice 工具都不是发行包的核心依赖。
 
 每个原生发布任务依据 `packaging/toolchain.lock.json` 生成 `resources/tools/<target>`：
 
 - scrcpy 4.1 官方便携归档提供客户端、匹配 `scrcpy-server` 与 ADB 37.0.0；Windows 还保留同归档运行库。
 - Google Maven AAPT2 `9.4.0-15978811` 提供 APK 分析器与完整 `NOTICE`。
+- Detect It Easy `3.21` 为 Windows x86_64、Linux x86_64、macOS aarch64 和 macOS x86_64 四个目标准备原生 `diec`、APK/DEX 规则库与必要 Qt 运行库；目标资源与许可材料都必须通过锁文件和逐文件清单验证。
 - FFmpeg `9.0.1` 从固定源码构建，只启用 H.264→MJPEG 所需的 LGPL 组件，不启用 GPL、nonfree、网络或外部编解码器。
 - go-ios `1.3.2-mobius.1` 从固定提交构建，使用仓库公开补丁标记版本，并将转发与可选截图服务绑定从所有网卡改为 `127.0.0.1`。
 - Mobius SSH/SFTP `0.2.0` 从仓库内审查源码和锁定 Go 模块构建，只接受后端生成的参数子集，支持密码/私钥执行、单文件 SFTP 和回环 `-L`/`-R`。首次主机密钥写入应用私有 `known_hosts`，变更后拒绝连接。
 
-准备脚本在解包前核对 HTTPS 来源、精确大小和 SHA-256，限制归档成员类型与展开容量；源码归档中的许可只按锁定路径提取普通文件，不跟随符号链接。验证脚本核对目标架构、逐文件清单、执行权限和原生版本冒烟测试。生成的 `manifest.json` 与工具同包，目标 ADB/AAPT2 NOTICE、scrcpy 便携依赖许可/内嵌声明、FFmpeg 配置、Go 许可和 go-ios/Mobius SSH 依赖许可位于相邻 `licenses/`。Release 另附 scrcpy 及其便携依赖、FFmpeg、go-ios/Go、Mobius SSH 模块的完整第三方源码、链接索引与构建/重链脚本归档，其哈希进入 `SHA256SUMS.txt`。工具不会在已安装应用运行时下载或静默更新。
+准备脚本在解包前核对 HTTPS 来源、精确大小和 SHA-256，限制归档成员类型与展开容量；源码归档中的许可只按锁定路径提取普通文件，不跟随符号链接。验证脚本在 Windows x86_64、Linux x86_64、macOS aarch64 和 macOS x86_64 四个目标上核对文件集、架构、逐文件清单、执行权限、原生版本冒烟与 Detect It Easy 规则库/运行库完整性。生成的 `manifest.json` 与工具同包，目标 ADB/AAPT2 NOTICE、scrcpy 便携依赖许可/内嵌声明、FFmpeg 配置、Detect It Easy/Qt 许可材料、Go 许可和 go-ios/Mobius SSH 依赖许可位于相邻 `licenses/`。Release 另附 scrcpy 及其便携依赖、FFmpeg、Detect It Easy/Qt 许可与源码提供材料、go-ios/Go、Mobius SSH 模块的第三方源码、链接索引与构建/重链脚本归档，其哈希进入 `SHA256SUMS.txt`。工具不会在已安装应用运行时下载或静默更新。
 
 越狱会话的 `ssh`/`scp` 已随安装包提供，不依赖系统 OpenSSH 或 `PATH`。Windows Apple Mobile Device 驱动/服务、Linux usbmuxd/udev、设备信任、Developer Disk Image、越狱 SSH 服务、AppSync 和设备端安装器属于系统/设备集成，不能打包为普通应用资源。设备端 Frida Server 也不走随包解析，始终由用户按版本和 ABI 选择；Mobius 没有主机 Frida CLI 依赖。
 
 ## 测试策略
 
-- 纯逻辑单元测试：解析 ADB/go-ios 输出、端口映射、iOS 隧道方向/回环与精确加固版本、libimobiledevice 固定回退、文件列表、地址与路径校验。
-- 伪工具集成测试：使用可控的假 `adb` / `scrcpy` / `ffmpeg` / `ios` / `idevice_*` / `iproxy` / `ssh` / `scp` 可执行程序覆盖超时、乱码、超大输出、链路中断、会话清理与失败码。
-- 工具资源测试：原生 runner 重新下载锁定归档、比对 ADB、验证 scrcpy 依赖许可，从源码构建 FFmpeg/go-ios/Mobius SSH，运行 SSH 安全边界单测，验证逐文件哈希、目标架构与版本冒烟；macOS 签名后刷新并再次验证清单。
+- 纯逻辑单元测试：解析 ADB/go-ios/Detect It Easy JSON 输出、APK 加固三态归类、端口映射、iOS 隧道方向/回环与精确加固版本、libimobiledevice 固定回退、文件列表、地址与路径校验。
+- 伪工具集成测试：使用可控的假 `adb` / `scrcpy` / `ffmpeg` / `diec` / `ios` / `idevice_*` / `iproxy` / `ssh` / `scp` 可执行程序覆盖 25 秒扫描超时语义、乱码、超大输出、无效 JSON、链路中断、会话清理与失败码。
+- 工具资源测试：四个原生目标 runner 重新下载锁定归档、比对 ADB、验证 scrcpy 依赖许可和 Detect It Easy CLI/规则库/Qt 运行库与许可材料，从源码构建 FFmpeg/go-ios/Mobius SSH，运行 SSH 安全边界单测，验证逐文件哈希、目标架构与版本冒烟；macOS 签名后刷新并再次验证清单。
 - 三平台构建测试：每次提交执行前端构建、`cargo check` 和 `cargo test`。
-- 实体设备测试：Android USB/Wi-Fi/模拟器、内嵌连续视频与单帧降级、旋转布局、会话清理、截图/录屏/剪贴板；越狱 iOS 的已配对 screenshotr、四个 go-ios 固定操作与 libimobiledevice 回退、go-ios/`iproxy` USB 转发、SSH `-L` / `-R` 与会话/退出清理。未被 `ios list --details`（或明确测试的回退通道）实际枚举的开发环境不能记为 iOS 真机通过。
+- 实体设备测试：Android USB/Wi-Fi/模拟器、内嵌连续视频与单帧降级、旋转布局、投屏会话清理、录屏跨设备/页面导航保留及用户停止/应用退出收尾、截图/剪贴板；越狱 iOS 的已配对 screenshotr、四个 go-ios 固定操作与 libimobiledevice 回退、go-ios/`iproxy` USB 转发、SSH `-L` / `-R` 与会话/退出清理。未被 `ios list --details`（或明确测试的回退通道）实际枚举的开发环境不能记为 iOS 真机通过。
 - 发布验收：安装、升级、卸载、签名校验、SmartScreen/Gatekeeper、Linux udev 和 Wayland/X11。

@@ -36,6 +36,7 @@ const mockTools: ToolHealth[] = [
   mockTool({ id: "scrcpy", name: "scrcpy", version: "4.1", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/scrcpy", source: "bundled", required: true }),
   mockTool({ id: "ffmpeg", name: "FFmpeg", version: "9.0.1", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/ffmpeg", source: "bundled", required: true }),
   mockTool({ id: "aapt2", name: "Android Asset Packaging Tool", version: "9.4.0-15978811", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/aapt2", source: "bundled", required: true }),
+  mockTool({ id: "diec", name: "Detect It Easy CLI", version: "3.21", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/die/diec", source: "bundled", required: true, purpose: "APK 加固特征启发式识别" }),
   mockTool({ id: "ios", name: "go-ios", version: "1.3.2-mobius.1", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/ios", source: "bundled", required: true }),
   mockTool({ id: "ssh", name: "Mobius SSH Client", version: "Mobius SSH/SFTP Client 0.2.0", state: "ready", path: "/Applications/Mobius/resources/tools/macos-aarch64/ssh", source: "bundled", required: true }),
   mockTool({ id: "scp", name: "Mobius SFTP Transfer", state: "ready", path: "/Applications/Mobius/resources/tools/macos-aarch64/scp", source: "bundled", required: true }),
@@ -64,6 +65,21 @@ const mockPackage: PackageAnalysis = {
   warnings: [],
   source: "aapt2",
   fallbackUsed: false,
+  protection: {
+    status: "detected",
+    engine: "Detect It Easy",
+    engineVersion: "3.21",
+    findings: [{
+      id: "demo-protector",
+      name: "示例加固特征",
+      vendor: "Preview",
+      category: "protector",
+      confidence: "medium",
+      evidence: ["lib/arm64-v8a/libprotect.so", "assets/protect.dat"],
+    }],
+    scannedEntries: 1842,
+    warnings: [],
+  },
 };
 
 const mockInstalledApps: InstalledApp[] = [
@@ -92,6 +108,7 @@ interface WirePackageAnalysis {
   usageDescriptions: Record<string, string>;
   architectures?: string[];
   icon?: { archivePath: string; mimeType: string; dataBase64: string; sizeBytes: number };
+  protection?: PackageAnalysis["protection"];
   warnings: string[];
 }
 
@@ -118,9 +135,27 @@ function permissionRisk(name: string): PackagePermission["risk"] {
   return "normal";
 }
 
+function normalizePermissions(raw: WirePackageAnalysis): PackagePermission[] {
+  const normalized = new Map<string, PackagePermission>();
+  for (const name of raw.permissions) {
+    if (!normalized.has(name)) {
+      normalized.set(name, { name, label: name.split(".").pop()?.replaceAll("_", " "), risk: permissionRisk(name) });
+    }
+  }
+  for (const [name, usageDescription] of Object.entries(raw.usageDescriptions)) {
+    const existing = normalized.get(name);
+    normalized.set(name, {
+      ...existing,
+      name,
+      label: existing?.label ?? name.replace(/^NS/, "").replace(/UsageDescription$/, ""),
+      usageDescription,
+      risk: existing?.risk === "dangerous" ? "dangerous" : "sensitive",
+    });
+  }
+  return [...normalized.values()];
+}
+
 function normalizePackage(raw: WirePackageAnalysis): PackageAnalysis {
-  const manifestPermissions = raw.permissions.map((name) => ({ name, label: name.split(".").pop()?.replaceAll("_", " "), risk: permissionRisk(name) }));
-  const privacyPermissions = Object.entries(raw.usageDescriptions).map(([name, usageDescription]) => ({ name, label: name.replace(/^NS/, "").replace(/UsageDescription$/, ""), usageDescription, risk: "sensitive" as const }));
   return {
     path: raw.path,
     fileName: raw.fileName,
@@ -134,11 +169,12 @@ function normalizePackage(raw: WirePackageAnalysis): PackageAnalysis {
     minOsVersion: raw.minimumOsVersion,
     targetOsVersion: raw.targetSdkVersion,
     architectures: raw.architectures ?? [],
-    permissions: [...manifestPermissions, ...privacyPermissions],
+    permissions: normalizePermissions(raw),
     iconDataUrl: raw.icon ? `data:${raw.icon.mimeType};base64,${raw.icon.dataBase64}` : undefined,
     warnings: raw.warnings,
     source: raw.source,
     fallbackUsed: raw.fallbackUsed,
+    protection: raw.protection,
   };
 }
 
@@ -169,6 +205,12 @@ async function previewPackage(selection: SelectedPackageFile): Promise<PackageAn
     source: "browserPreview",
     fallbackUsed: true,
     previewOnly: true,
+    protection: platform === "android" ? {
+      status: "inconclusive",
+      engine: "Detect It Easy",
+      findings: [],
+      warnings: ["浏览器预览不执行 APK 加固特征扫描。"],
+    } : undefined,
   };
 }
 

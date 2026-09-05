@@ -237,6 +237,8 @@ fn run_process_at_inner(
         clear_ambient_go_ios_environment(&mut command);
     } else if matches!(program, "ssh" | "scp") {
         clear_ambient_ssh_auth_environment(&mut command);
+    } else if program == "diec" {
+        clear_ambient_die_environment(&mut command);
     }
     command.envs(environment.iter().map(|(key, value)| (key, value)));
     let mut child = command
@@ -414,6 +416,58 @@ pub(crate) fn clear_ambient_ssh_auth_environment(command: &mut Command) {
     }
 }
 
+/// The APK signature engine is resolved only from the reviewed application
+/// bundle. Ignore loader and Qt overrides inherited from a terminal so they
+/// cannot redirect it to unrelated host libraries or add noisy diagnostics.
+pub(crate) fn clear_ambient_die_environment(command: &mut Command) {
+    for name in [
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "LD_DEBUG",
+        "LD_DEBUG_OUTPUT",
+        "LD_DYNAMIC_WEAK",
+        "LD_HWCAP_MASK",
+        "LD_ORIGIN_PATH",
+        "LD_PROFILE",
+        "LD_SHOW_AUXV",
+        "LD_USE_LOAD_BIAS",
+        "GLIBC_TUNABLES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+        "DYLD_FALLBACK_FRAMEWORK_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_ROOT_PATH",
+        "DYLD_IMAGE_SUFFIX",
+        "DYLD_VERSIONED_LIBRARY_PATH",
+        "DYLD_VERSIONED_FRAMEWORK_PATH",
+        "QML_IMPORT_PATH",
+        "QML2_IMPORT_PATH",
+        "QT_DEBUG_PLUGINS",
+        "QT_LOGGING_RULES",
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+    ] {
+        command.env_remove(name);
+    }
+    let inherited_names = std::env::vars_os()
+        .map(|(name, _)| name)
+        .chain(command.get_envs().map(|(name, _)| name.to_os_string()))
+        .collect::<Vec<_>>();
+    for name in inherited_names {
+        let normalized = name.to_string_lossy().to_ascii_uppercase();
+        if normalized.starts_with("LD_")
+            || normalized.starts_with("DYLD_")
+            || normalized.starts_with("QT_")
+            || normalized.starts_with("QML")
+            || normalized == "GLIBC_TUNABLES"
+        {
+            command.env_remove(name);
+        }
+    }
+}
+
 #[derive(Default)]
 struct Capture {
     bytes: Vec<u8>,
@@ -566,6 +620,26 @@ mod tests {
         assert!(removed.contains("MOBIUS_SSH_PASSWORD"));
         assert!(removed.contains("MOBIUS_SSH_ASKPASS_TOKEN"));
         assert!(removed.contains("SSH_ASKPASS"));
+    }
+
+    #[test]
+    fn inherited_loader_and_qt_overrides_are_removed_for_die() {
+        let mut command = background_command("diec");
+        clear_ambient_die_environment(&mut command);
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect::<std::collections::HashSet<_>>();
+        assert!(removed.contains("LD_LIBRARY_PATH"));
+        assert!(removed.contains("LD_PRELOAD"));
+        assert!(removed.contains("LD_AUDIT"));
+        assert!(removed.contains("GLIBC_TUNABLES"));
+        assert!(removed.contains("DYLD_INSERT_LIBRARIES"));
+        assert!(removed.contains("DYLD_FRAMEWORK_PATH"));
+        assert!(removed.contains("DYLD_VERSIONED_LIBRARY_PATH"));
+        assert!(removed.contains("QML_IMPORT_PATH"));
+        assert!(removed.contains("QT_PLUGIN_PATH"));
     }
 
     #[test]
