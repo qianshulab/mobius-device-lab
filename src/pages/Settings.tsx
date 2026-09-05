@@ -1,5 +1,6 @@
 import { AlertCircle, AppWindow, CheckCircle2, ChevronRight, FolderDown, Info, KeyRound, Laptop, Network, Palette, RefreshCw, Save, ShieldCheck, TerminalSquare, Wrench } from "lucide-react";
 import { useState } from "react";
+import packageMetadata from "../../package.json";
 import type { AppSettings, ToolHealth } from "../types";
 import { Button, Field, InlineNotice, Panel, StatusBadge, StatusDot } from "../components/Ui";
 import { chooseDirectory, chooseLocalFile } from "../lib/dialog";
@@ -108,7 +109,7 @@ export default function SettingsPage({ settings, tools, group, onGroupChange, on
           </Panel>}
 
           {group === "about" && <Panel className="about-panel">
-            <div className="about-hero"><img src="/brand/mobius-mark.png" alt="Mobius" /><div><h2>Mobius</h2><p>Mobile Device Workbench</p><StatusBadge tone="warning">PREVIEW 0.1.0</StatusBadge></div></div>
+            <div className="about-hero"><img src="/brand/mobius-mark.png" alt="Mobius" /><div><h2>Mobius</h2><p>Mobile Device Workbench</p><StatusBadge tone="warning">PREVIEW {packageMetadata.version}</StatusBadge></div></div>
             <p className="about-copy">为自有 Android 与越狱 iOS 测试设备打造的本地开发调试与管理工作台。一个代码库，面向 Windows、Linux 与 macOS 分别构建原生安装包。</p>
             <div className="about-meta"><span>界面：React + TypeScript</span><span>本机核心：Rust + Tauri 2</span><span>默认无遥测</span></div>
           </Panel>}

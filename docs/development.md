@@ -103,10 +103,10 @@ python3 scripts/verify_tool_bundle.py \
 1. 按锁文件验证 HTTPS 下载的精确大小与 SHA-256，并使用带条目/容量上限的安全解包。
 2. 从 scrcpy 4.1 官方便携包提取客户端、匹配 Server、ADB 37.0.0 及 Windows 运行库；另下载精确 Google Platform Tools 37.0.0，逐字节核对 ADB/相邻 DLL 并收录对应 `NOTICE`。
 3. 从锁定源码提取 scrcpy 便携依赖的许可和内嵌第三方声明；从 Google Maven AAPT2 产物提取二进制与 `NOTICE`。
-4. 从 Detect It Easy 3.21 的目标官方包只准备控制台 `diec`、APK/DEX 规则库与相邻必要运行库，并从精确源码归档收集 Detect It Easy、内嵌依赖与动态链接 Qt 模块的许可/重链材料。
+4. 从 Detect It Easy 3.21 的目标官方包只准备控制台 `diec`、APK/DEX 规则库与相邻必要运行库。Linux 额外从哈希锁定的 Ubuntu 20.04 包中只提取 ICU 66、zlib、PCRE/PCRE2、double-conversion 和 GLib 的必要 SONAME 文件；同时从精确源码归档收集 Detect It Easy、内嵌依赖、动态链接 Qt 模块以及这些 Linux 库的许可/重链材料和 Ubuntu 打包补丁。
 5. 从锁定源码构建最小 LGPL FFmpeg 9.0.1；Windows 应用公开的原生计时补丁，锁定编译器版本并审计 PE 导入，以拒绝 `libwinpthread` 等未随包运行库；macOS 应用主体默认固定 12.0 构建下限，但不抬高调用者已设的更低值。同时使用 Go 1.26.5 对 go-ios 1.3.2 应用公开的 loopback/version 补丁后构建 `1.3.2-mobius.1`。
 6. 收集许可证、Qt 动态链接与重链说明、Go 运行时/标准库许可、模块清单与依赖许可证，为所有随包文件生成大小、权限和 SHA-256 `manifest.json`。
-7. 在 `windows-x86_64`、`linux-x86_64`、`macos-aarch64` 与 `macos-x86_64` 四个目标上验证文件集、目标架构、Detect It Easy 规则库/运行库/许可材料，并执行原生版本与扫描冒烟测试。macOS 发布任务之后会签名 Mach-O 文件、刷新清单并再次验证。
+7. 在 `windows-x86_64`、`linux-x86_64`、`macos-aarch64` 与 `macos-x86_64` 四个目标上验证文件集、目标架构、Detect It Easy 规则库/运行库/许可材料，并执行原生版本与扫描冒烟测试。Linux 验证还会用纯 Python 解析每个 ELF 的 `DT_NEEDED`/`DT_SONAME`，锁定除 glibc、C++ 运行时和动态加载器外的完整闭包，漏包或多包都会失败。macOS 发布任务之后会签名 Mach-O 文件、刷新清单并再次验证。
 
 工具只在构建/开发准备阶段联网取得，已安装应用不会运行下载器或静默替换它们。生成目录由 `.gitignore` 排除；版本、补丁、脚本、锁文件与通用第三方声明进入源码审查。
 
@@ -156,7 +156,7 @@ src-tauri/resources/tools/macos-aarch64/scp -V
 
 ### 桌面应用找不到命令
 
-正式安装包应直接显示 ADB、scrcpy、FFmpeg、AAPT2、Detect It Easy、go-ios、SSH 与 SCP 为“随包 / 就绪”。Detect It Easy 还要求 `diec` 相邻的 `db` 规则库存在；若缺失，请先重新安装同一官方 Release，并核对杀毒软件或企业终端策略是否隔离了资源文件。源码开发则先执行上文的准备与验证脚本。
+正式安装包应直接显示 ADB、scrcpy、FFmpeg、AAPT2、Detect It Easy、go-ios、SSH 与 SCP 为“随包 / 就绪”。Detect It Easy 还要求 `diec` 相邻的 `db` 规则库和 Linux 的完整 ELF 运行库闭包存在；若缺失，请先重新安装同一官方 Release，并核对杀毒软件或企业终端策略是否隔离了资源文件。源码开发则先执行上文的准备与验证脚本。
 
 工具查找顺序是：有效的用户指定单个工具或受控/iOS 工具目录、安装包 `resources/tools`、Android SDK 常见目录、系统 `PATH`。升级遗留的显式路径若已失效，解析器可安全回到受控随包副本；不会在这种情况下悄悄改用未知的 SDK/PATH 版本。设置页保存路径时会验证绝对路径和可执行权限。
 

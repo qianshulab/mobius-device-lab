@@ -181,6 +181,7 @@ def source_records(lock: dict[str, Any]) -> list[dict[str, Any]]:
                 },
                 "qtAttributions": dependency.get("qtAttributions"),
                 "qtAttributionDirectory": label,
+                "supplementalSources": dependency.get("supplementalSources", []),
             }
         )
     go_toolchain = components["go-ios"]["goToolchain"]
@@ -258,6 +259,55 @@ def stage_sources_and_licenses(
         downloaded = download_locked(f"{label} source", artifact, cache)
         source_destination = archive_root / "sources" / file_relative.name
         copy_regular(downloaded, source_destination, f"{label} source")
+
+        copied_supplemental_sources: list[dict[str, Any]] = []
+        supplemental_sources = record.get("supplementalSources", [])
+        if not isinstance(supplemental_sources, list):
+            raise BundleError(f"{label}: supplemental source lock is invalid")
+        for supplemental_index, supplemental_value in enumerate(
+            supplemental_sources
+        ):
+            if not isinstance(supplemental_value, dict):
+                raise BundleError(f"{label}: supplemental source lock is invalid")
+            supplemental = checked_artifact(
+                f"{label} supplemental source {supplemental_index + 1}",
+                supplemental_value,
+            )
+            supplemental_name = supplemental.get("fileName")
+            if not isinstance(supplemental_name, str):
+                raise BundleError(
+                    f"{label}: supplemental source fileName is missing"
+                )
+            supplemental_relative = safe_relative_path(supplemental_name)
+            if len(supplemental_relative.parts) != 1:
+                raise BundleError(
+                    f"{label}: supplemental source fileName must be a basename"
+                )
+            if supplemental_relative.name.lower() in used_names:
+                raise BundleError(
+                    f"Duplicate source archive name: {supplemental_relative.name}"
+                )
+            used_names.add(supplemental_relative.name.lower())
+            supplemental_download = download_locked(
+                f"{label} supplemental source {supplemental_index + 1}",
+                supplemental,
+                cache,
+            )
+            supplemental_destination = (
+                archive_root / "sources" / supplemental_relative.name
+            )
+            copy_regular(
+                supplemental_download,
+                supplemental_destination,
+                f"{label} supplemental source",
+            )
+            copied_supplemental_sources.append(
+                {
+                    "sourceFile": f"sources/{supplemental_relative.name}",
+                    "sourceSize": supplemental["size"],
+                    "sourceSha256": supplemental["sha256"],
+                }
+            )
 
         copied_licenses: list[str] = []
         license_files = record.get("licenseFiles")
@@ -423,6 +473,7 @@ def stage_sources_and_licenses(
             "sourceFile": f"sources/{file_relative.name}",
             "sourceSize": artifact["size"],
             "sourceSha256": artifact["sha256"],
+            "supplementalSourceFiles": copied_supplemental_sources,
             "usedBy": record["usedBy"],
             "linkage": record.get("linkage"),
             "licenseFiles": copied_licenses,
@@ -618,8 +669,10 @@ verified NOTICE is included here. The prepare script independently compares ever
 bundled portable ADB file byte-for-byte with Platform Tools 37.0.0 before packaging.
 
 Detect It Easy 3.21 and the exact Qt/ICU module sources used by its target
-packages are included. Linux also includes the matching Ubuntu ICU packaging
-patches. Every Qt module's source qt_attribution.json files are preserved both
+packages are included. Linux also includes the exact sources, Ubuntu source
+package descriptors and packaging changes for zlib, PCRE/PCRE2,
+double-conversion and GLib, which complete the scanner's non-glibc ELF runtime
+closure. Every Qt module's source qt_attribution.json files are preserved both
 beside the source index and in each applicable target bundle. The Windows
 portable package contains proprietary Microsoft Visual C++
 v14 runtime DLLs; they have no corresponding source offer. Their exact hashes,

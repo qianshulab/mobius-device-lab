@@ -31,8 +31,10 @@ Each supported target contains:
 - Detect It Easy 3.21's `diec` console scanner, signature database, and only the runtime files
   needed by that console scanner. All targets use `die/diec` (or `die/diec.exe`) with `die/db/`;
   Qt remains dynamically linked and replaceable. The target uses Qt 5.12.8 on Linux, Qt 5.15.2
-  on Windows/macOS x86_64, and Qt 6.11.0 on macOS arm64. Linux also carries the exact ICU 66
-  shared-library closure and Ubuntu source patches required by upstream Qt. The upstream arm64 build requires
+  on Windows/macOS x86_64, and Qt 6.11.0 on macOS arm64. Linux also carries the complete non-glibc
+  ELF dependency closure required by upstream Qt: ICU 66, zlib, PCRE/PCRE2, double-conversion and GLib,
+  all extracted from hash-locked Ubuntu 20.04 packages. Their exact source, Ubuntu packaging changes and
+  package copyright files accompany the release. The upstream arm64 build requires
   macOS 13 or newer, while the main application retains its macOS 12 floor. Every Qt module's
   source `qt_attribution.json` files, their referenced license/copyright texts, and each available
   module `LICENSES/` catalog are retained under `licenses/die-qt-attributions/`.
@@ -92,7 +94,8 @@ download size and SHA-256 before extraction, rejects links/devices/path traversa
 and expansion limits, extracts source licenses only from explicitly locked regular members,
 builds FFmpeg, go-ios, and the Mobius SSH/SFTP helper from source, safely expands the locked native
 Detect It Easy package, gathers licenses, and writes the per-file manifest. The verify script rejects
-unexpected files and archives, checks hashes, permissions and target architectures, then runs native
+unexpected files and archives, checks hashes, permissions and target architectures, parses every bundled
+Linux ELF dynamic section to require an exact, closed `DT_NEEDED` graph, then runs native
 version/database smoke tests and verifies the matching scrcpy Server payload.
 
 macOS nested Mach-O files are signed before the outer application bundle; because signing changes
@@ -110,7 +113,8 @@ Every Release additionally contains
 `Mobius-Device-Lab_<version>_third-party-sources.tar.xz`, produced by
 `scripts/create_third_party_sources.py`. It carries the exact complete scrcpy and portable
 dependency sources (including target zlib and Windows MinGW-w64 runtime), FFmpeg, Detect It Easy,
-all Qt modules distributed with `diec`, go-ios, the Mobius SSH/SFTP helper's locked modules, and Go
+all Qt modules and Linux shared libraries distributed with `diec` (including their exact Ubuntu source
+package descriptors and packaging patches), go-ios, the Mobius SSH/SFTP helper's locked modules, and Go
 sources; helper source/tests, the patch, licenses,
 target ADB notices, linkage index, lock, and build/relink scripts are included too. Its own
 `SHA256SUMS.txt` authenticates every other member. The archive and all

@@ -99,7 +99,7 @@ Windows、Linux 与 macOS 安装包都包含对应平台、架构的受控工具
 - scrcpy 客户端与匹配的 `scrcpy-server` `4.1`；Windows 包同时保留它运行所需的同版 DLL。
 - FFmpeg `9.0.1` 的最小 LGPL 构建，只启用内嵌 Android 画面所需的 H.264 解码与 MJPEG 输出链路，不启用 GPL、nonfree、网络或外部编解码器。
 - Google Maven 发布的 AAPT2 `9.4.0-15978811` 及其完整 `NOTICE`，用于 APK 元数据分析。
-- MIT 许可的 Detect It Easy `3.21` CLI、APK/DEX 规则库和目标平台所需 Qt 运行库，用于完全离线的壳、加固与混淆特征识别。扫描有 25 秒上限；引擎缺失、异常、超时或输出不完整时明确显示“无法确定”。上游 Apple Silicon 3.21 组件要求 macOS 13+；macOS 12 上其他功能仍可运行，该项扫描会如实降级为“无法确定”。
+- MIT 许可的 Detect It Easy `3.21` CLI、APK/DEX 规则库和目标平台所需 Qt 运行库，用于完全离线的壳、加固与混淆特征识别。Linux 版额外内置并验证 ICU、zlib、PCRE/PCRE2、double-conversion 和 GLib 的完整非 glibc ELF 依赖闭包，不要求用户补装。扫描有 25 秒上限；引擎缺失、异常、超时或输出不完整时明确显示“无法确定”。上游 Apple Silicon 3.21 组件要求 macOS 13+；macOS 12 上其他功能仍可运行，该项扫描会如实降级为“无法确定”。
 - go-ios `1.3.2-mobius.1`，从 go-ios `1.3.2` 源码构建；Mobius 的公开补丁固定版本标识，并将端口转发与可选截图服务监听从所有网卡收紧到 `127.0.0.1`。
 - 受限 Mobius SSH/SFTP 客户端 `0.2.0`，只实现应用会生成的命令执行、单文件 SFTP 与回环 `-L`/`-R` 转发；四个目标均以 CGO 关闭方式从锁定 Go 模块构建。
 

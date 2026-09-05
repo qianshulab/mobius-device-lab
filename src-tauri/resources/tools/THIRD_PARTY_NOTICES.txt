@@ -194,7 +194,27 @@ The upstream Linux Qt 5.12.8 build requires the ICU 66 ABI, which is no longer
 present on newer distributions. Mobius therefore ships only libicudata,
 libicui18n and libicuuc from Ubuntu's signed 66.1-2ubuntu2.1 package. The exact
 upstream source, Ubuntu packaging patches and package copyright file accompany
-the release. Other Qt dependencies retain stable system ABIs and are not copied.
+the release.
+
+Additional Linux Qt runtime closure
+-----------------------------------
+Mobius also ships only the required SONAME file from each of these hash-locked
+Ubuntu 20.04 packages:
+
+- double-conversion 3.1.5-4ubuntu1 (BSD-3-Clause)
+- GLib 2.64.6-1~ubuntu20.04.9 (LGPL-2.1-or-later)
+- PCRE2 10.34-7ubuntu0.1 (BSD-3-Clause)
+- PCRE 2:8.39-12ubuntu0.1 (BSD-3-Clause)
+- zlib 1:1.2.11.dfsg-2ubuntu1.5 (Zlib)
+
+These libraries complete every non-glibc `DT_NEEDED` edge of the shipped Linux
+diec/Qt/ICU graph; GLib's otherwise easy-to-miss libpcre.so.3 dependency is
+included as well. The verifier parses each ELF dynamic section and rejects a
+missing, extra, renamed, or newly introduced dependency. Exact upstream source,
+Ubuntu source-package descriptors and packaging changes, package copyright
+files, and relinking instructions accompany the release. The only remaining
+system ABI dependencies are the GNU/Linux loader and glibc/libpthread/libdl,
+libm, libstdc++ and libgcc_s runtime families.
 
 Microsoft Visual C++ runtime (Windows Detect It Easy distribution)
 ------------------------------------------------------------------

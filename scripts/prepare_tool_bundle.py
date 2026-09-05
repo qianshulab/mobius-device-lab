@@ -78,6 +78,7 @@ def checked_artifact(component: str, value: dict[str, Any]) -> dict[str, Any]:
         "tar.bz2",
         "pkg",
         "deb",
+        "raw",
     }:
         raise BundleError(f"{component}: unsupported archive type {value['archive']}")
     return value
@@ -394,6 +395,8 @@ def extract_locked(
         safe_extract_pkg(archive, destination)
     elif artifact["archive"] == "deb":
         safe_extract_deb(archive, destination, artifact)
+    elif artifact["archive"] == "raw":
+        raise BundleError(f"{component}: raw artifacts cannot be extracted")
     else:
         safe_extract_tar(archive, destination, artifact["archive"])
     return destination
@@ -1235,6 +1238,7 @@ def stage_die(
                 "license": dependency["license"],
                 "projectUrl": dependency["projectUrl"],
                 "source": dependency["source"],
+                "supplementalSources": dependency.get("supplementalSources", []),
                 "linkage": dependency.get("linkage", "shared"),
                 "qtAttributionFiles": attribution_files,
                 "qtAttributionLicenseFiles": attribution_license_files,
@@ -1258,6 +1262,7 @@ def stage_die(
     )
 
     staged_runtime: list[str] = []
+    linux_runtime_package_report: list[dict[str, Any]] = []
     if target.startswith("windows-"):
         runtime_files = artifact.get("runtimeFiles")
         proprietary = artifact.get("proprietaryRuntime")
@@ -1346,6 +1351,128 @@ def stage_die(
             raise BundleError(
                 "Detect It Easy ICU binary and source-package notices do not match"
             )
+
+        runtime_packages = artifact.get("linuxRuntimePackages")
+        if not isinstance(runtime_packages, list) or not runtime_packages:
+            raise BundleError(
+                "Detect It Easy: locked Linux dependency packages are missing"
+            )
+        seen_package_names: set[str] = set()
+        seen_runtime_destinations = set(staged_runtime)
+        for package in runtime_packages:
+            if not isinstance(package, dict):
+                raise BundleError("Detect It Easy: invalid Linux runtime package lock")
+            package_name = package.get("name")
+            package_version = package.get("version")
+            package_license = package.get("license")
+            project_url = package.get("projectUrl")
+            if (
+                not isinstance(package_name, str)
+                or not re.fullmatch(r"[A-Za-z0-9_.+-]+", package_name)
+                or package_name in seen_package_names
+                or not isinstance(package_version, str)
+                or not package_version
+                or not isinstance(package_license, str)
+                or not package_license
+                or not isinstance(project_url, str)
+                or not project_url.startswith("https://")
+            ):
+                raise BundleError(
+                    "Detect It Easy: incomplete Linux runtime package metadata"
+                )
+            seen_package_names.add(package_name)
+            package_sources = package.get("sourceDependencies")
+            if (
+                not isinstance(package_sources, list)
+                or not package_sources
+                or any(label not in dependency_labels for label in package_sources)
+            ):
+                raise BundleError(
+                    f"Detect It Easy: source mapping is missing for {package_name}"
+                )
+            package_artifact = checked_artifact(
+                f"Detect It Easy Linux runtime {package_name}",
+                package.get("artifact", {}),
+            )
+            package_root = extract_locked(
+                f"detect-it-easy-linux-runtime-{package_name}",
+                package_artifact,
+                cache,
+                work,
+            )
+            package_runtime_files = package.get("runtimeFiles")
+            if not isinstance(package_runtime_files, list) or not package_runtime_files:
+                raise BundleError(
+                    f"Detect It Easy: runtime files are missing for {package_name}"
+                )
+            packaged_runtime: list[str] = []
+            for item in package_runtime_files:
+                if not isinstance(item, dict):
+                    raise BundleError(
+                        f"Detect It Easy: invalid runtime file for {package_name}"
+                    )
+                source_value = item.get("path")
+                destination_value = item.get("destination")
+                if not isinstance(source_value, str) or not isinstance(
+                    destination_value, str
+                ):
+                    raise BundleError(
+                        f"Detect It Easy: incomplete runtime file for {package_name}"
+                    )
+                source_relative = safe_relative_path(source_value)
+                destination_relative = safe_relative_path(destination_value)
+                if len(destination_relative.parts) != 1:
+                    raise BundleError(
+                        f"Detect It Easy: invalid runtime destination for {package_name}"
+                    )
+                staged_destination = f"die/{destination_relative.name}"
+                if staged_destination in seen_runtime_destinations:
+                    raise BundleError(
+                        f"Detect It Easy: duplicate Linux runtime {destination_relative.name}"
+                    )
+                stager.copy(
+                    package_root.joinpath(*source_relative.parts),
+                    staged_destination,
+                    "diec",
+                )
+                seen_runtime_destinations.add(staged_destination)
+                staged_runtime.append(staged_destination)
+                packaged_runtime.append(staged_destination)
+
+            notice_value = package.get("notice")
+            notice_destination_value = package.get("noticeDestination")
+            if not isinstance(notice_value, str) or not isinstance(
+                notice_destination_value, str
+            ):
+                raise BundleError(
+                    f"Detect It Easy: package notice is missing for {package_name}"
+                )
+            notice_relative = safe_relative_path(notice_value)
+            notice_destination = safe_relative_path(notice_destination_value)
+            if (
+                not notice_destination.parts
+                or notice_destination.parts[0] != "licenses"
+            ):
+                raise BundleError(
+                    f"Detect It Easy: package notice destination is invalid for {package_name}"
+                )
+            stager.copy(
+                package_root.joinpath(*notice_relative.parts),
+                notice_destination.as_posix(),
+                "diec",
+            )
+            linux_runtime_package_report.append(
+                {
+                    "name": package_name,
+                    "version": package_version,
+                    "license": package_license,
+                    "projectUrl": project_url,
+                    "binaryPackage": package_artifact,
+                    "runtime": packaged_runtime,
+                    "notice": notice_destination.as_posix(),
+                    "sourceDependencies": package_sources,
+                }
+            )
     else:
         framework_names = artifact.get("frameworks")
         framework_version = artifact.get("frameworkVersion")
@@ -1377,9 +1504,10 @@ def stage_die(
 
     stager.write_text(
         "licenses/die-qt-relinking.txt",
-        "Detect It Easy uses dynamically linked Qt libraries, plus ICU on Linux. "
+        "Detect It Easy uses dynamically linked Qt libraries, plus ICU, zlib, "
+        "PCRE/PCRE2, double-conversion and GLib on Linux. "
         "The shipped shared libraries may be replaced with ABI-compatible modified "
-        "builds. Exact corresponding Qt/ICU sources and Ubuntu ICU packaging patches "
+        "builds. Exact corresponding sources and Ubuntu packaging patches "
         "are included in the release companion source archive; the lock and "
         "provenance record identify each version.\n",
         "diec",
@@ -1396,6 +1524,7 @@ def stage_die(
                 "database": "die/db",
                 "runtime": staged_runtime,
                 "sourceDependencies": dependency_report,
+                "linuxRuntimePackages": linux_runtime_package_report,
             },
             indent=2,
             ensure_ascii=False,

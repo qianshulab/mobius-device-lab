@@ -32,6 +32,17 @@ H264_SMOKE_FRAME = (
 )
 MACOS_MINIMUM_VERSION = (12, 0, 0)
 DIE_ARM64_MINIMUM_VERSION = (13, 0, 0)
+LINUX_ELF_SYSTEM_ALLOWLIST = frozenset(
+    {
+        "ld-linux-x86-64.so.2",
+        "libc.so.6",
+        "libdl.so.2",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libpthread.so.0",
+        "libstdc++.so.6",
+    }
+)
 # Google still ships the Windows platform-tools 37.0.0 ADB client and its two
 # companion DLLs as PE32/i386 binaries. They are the only 32-bit payloads we
 # intentionally permit in the x86_64 package; Windows x64 runs them through
@@ -355,6 +366,118 @@ def verify_machine(file_path: Path, target: str) -> None:
     raise VerifyError(f"Expected a Mach-O executable: {file_path}")
 
 
+def elf_dynamic_metadata(file_path: Path) -> tuple[list[str], str | None]:
+    """Read DT_NEEDED and DT_SONAME from a little-endian ELF64 without host tools."""
+    with file_path.open("rb") as stream:
+        header = stream.read(64)
+        if (
+            len(header) != 64
+            or header[:4] != b"\x7fELF"
+            or header[4] != 2
+            or header[5] != 1
+        ):
+            raise VerifyError(f"Expected a little-endian ELF64 file: {file_path}")
+        program_offset = struct.unpack_from("<Q", header, 32)[0]
+        program_entry_size = struct.unpack_from("<H", header, 54)[0]
+        program_count = struct.unpack_from("<H", header, 56)[0]
+        if (
+            program_entry_size < 56
+            or program_entry_size > 4096
+            or program_count == 0
+            or program_count > 4096
+        ):
+            raise VerifyError(f"Invalid ELF program header table: {file_path}")
+
+        load_segments: list[tuple[int, int, int]] = []
+        dynamic_segment: tuple[int, int] | None = None
+        for index in range(program_count):
+            stream.seek(program_offset + index * program_entry_size)
+            entry = stream.read(program_entry_size)
+            if len(entry) != program_entry_size:
+                raise VerifyError(f"Truncated ELF program header table: {file_path}")
+            segment_type = struct.unpack_from("<I", entry, 0)[0]
+            file_offset = struct.unpack_from("<Q", entry, 8)[0]
+            virtual_address = struct.unpack_from("<Q", entry, 16)[0]
+            file_size = struct.unpack_from("<Q", entry, 32)[0]
+            if segment_type == 1:  # PT_LOAD
+                load_segments.append((file_offset, virtual_address, file_size))
+            elif segment_type == 2:  # PT_DYNAMIC
+                if dynamic_segment is not None:
+                    raise VerifyError(
+                        f"ELF contains multiple dynamic segments: {file_path}"
+                    )
+                dynamic_segment = (file_offset, file_size)
+        if dynamic_segment is None or not load_segments:
+            raise VerifyError(f"ELF dynamic metadata is missing: {file_path}")
+
+        dynamic_offset, dynamic_size = dynamic_segment
+        if dynamic_size == 0 or dynamic_size > 16 * 1024 * 1024:
+            raise VerifyError(f"Invalid ELF dynamic segment size: {file_path}")
+        stream.seek(dynamic_offset)
+        dynamic = stream.read(dynamic_size)
+        if len(dynamic) != dynamic_size:
+            raise VerifyError(f"Truncated ELF dynamic segment: {file_path}")
+
+        string_table_address: int | None = None
+        string_table_size: int | None = None
+        needed_offsets: list[int] = []
+        soname_offset: int | None = None
+        for position in range(0, len(dynamic) - 15, 16):
+            tag, value = struct.unpack_from("<QQ", dynamic, position)
+            if tag == 0:  # DT_NULL
+                break
+            if tag == 1:  # DT_NEEDED
+                needed_offsets.append(value)
+            elif tag == 5:  # DT_STRTAB
+                string_table_address = value
+            elif tag == 10:  # DT_STRSZ
+                string_table_size = value
+            elif tag == 14:  # DT_SONAME
+                soname_offset = value
+        if (
+            string_table_address is None
+            or string_table_size is None
+            or string_table_size <= 0
+            or string_table_size > 64 * 1024 * 1024
+        ):
+            raise VerifyError(f"ELF string table is invalid: {file_path}")
+
+        string_table_offset: int | None = None
+        for file_offset, virtual_address, file_size in load_segments:
+            if (
+                virtual_address <= string_table_address
+                and string_table_address - virtual_address < file_size
+            ):
+                string_table_offset = (
+                    file_offset + string_table_address - virtual_address
+                )
+                break
+        if string_table_offset is None:
+            raise VerifyError(f"ELF string table is outside load segments: {file_path}")
+        stream.seek(string_table_offset)
+        string_table = stream.read(string_table_size)
+        if len(string_table) != string_table_size:
+            raise VerifyError(f"Truncated ELF string table: {file_path}")
+
+    def dynamic_string(offset: int) -> str:
+        if offset < 0 or offset >= len(string_table):
+            raise VerifyError(f"ELF dynamic string offset is invalid: {file_path}")
+        terminator = string_table.find(b"\0", offset)
+        if terminator < 0:
+            raise VerifyError(f"ELF dynamic string is unterminated: {file_path}")
+        try:
+            value = string_table[offset:terminator].decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise VerifyError(f"ELF dynamic string is not UTF-8: {file_path}") from error
+        if not value or "/" in value or "\\" in value or "\x00" in value:
+            raise VerifyError(f"ELF dynamic library name is unsafe: {file_path}")
+        return value
+
+    needed = [dynamic_string(offset) for offset in needed_offsets]
+    soname = dynamic_string(soname_offset) if soname_offset is not None else None
+    return needed, soname
+
+
 def verify_manifest(root: Path, target: str, lock: dict[str, Any]) -> dict[str, Any]:
     target_dir = root / target
     if target_dir.is_symlink() or not target_dir.is_dir():
@@ -617,11 +740,135 @@ def verify_die_layout(target_dir: Path, target: str, lock: dict[str, Any]) -> No
         runtime_names.extend(
             item["destination"] for item in artifact["icuRuntime"]["runtimeFiles"]
         )
+        runtime_packages = artifact.get("linuxRuntimePackages")
+        if not isinstance(runtime_packages, list) or not runtime_packages:
+            raise VerifyError("Detect It Easy Linux runtime package lock is missing")
+        package_names: set[str] = set()
+        for package in runtime_packages:
+            if not isinstance(package, dict):
+                raise VerifyError("Detect It Easy Linux runtime package lock is invalid")
+            package_name = package.get("name")
+            package_files = package.get("runtimeFiles")
+            notice_destination = package.get("noticeDestination")
+            package_sources = package.get("sourceDependencies")
+            if (
+                not isinstance(package_name, str)
+                or not package_name
+                or package_name in package_names
+                or not isinstance(package_files, list)
+                or not package_files
+                or not isinstance(notice_destination, str)
+                or not isinstance(package_sources, list)
+                or not package_sources
+                or any(label not in dependency_labels for label in package_sources)
+            ):
+                raise VerifyError(
+                    "Detect It Easy Linux runtime package lock is invalid"
+                )
+            package_names.add(package_name)
+            for item in package_files:
+                if not isinstance(item, dict) or not isinstance(
+                    item.get("destination"), str
+                ):
+                    raise VerifyError(
+                        f"Detect It Easy Linux runtime file lock is invalid: {package_name}"
+                    )
+                destination = PurePosixPath(item["destination"])
+                if (
+                    destination.is_absolute()
+                    or len(destination.parts) != 1
+                    or destination.name != item["destination"]
+                ):
+                    raise VerifyError(
+                        f"Detect It Easy Linux runtime destination is invalid: {package_name}"
+                    )
+                runtime_names.append(destination.name)
+            notice_relative = PurePosixPath(notice_destination)
+            if (
+                notice_relative.is_absolute()
+                or not notice_relative.parts
+                or notice_relative.parts[0] != "licenses"
+                or ".." in notice_relative.parts
+                or any(part in {"", "."} for part in notice_relative.parts)
+            ):
+                raise VerifyError(
+                    f"Detect It Easy Linux package notice path is invalid: {package_name}"
+                )
+            notice = target_dir.joinpath(*notice_relative.parts)
+            if notice.is_symlink() or not notice.is_file() or notice.stat().st_size <= 0:
+                raise VerifyError(
+                    f"Detect It Easy Linux package notice is missing: {package_name}"
+                )
+        if len(runtime_names) != len(set(runtime_names)):
+            raise VerifyError("Detect It Easy Linux runtime names are duplicated")
         for name in runtime_names:
             runtime = target_dir / "die" / name
             if not runtime.is_file():
                 raise VerifyError(f"Detect It Easy runtime is missing: {name}")
             verify_machine(runtime, target)
+
+        needed_lock = artifact.get("elfNeeded")
+        system_allowlist_value = artifact.get("elfSystemAllowlist")
+        if not isinstance(needed_lock, dict) or not isinstance(
+            system_allowlist_value, list
+        ):
+            raise VerifyError("Detect It Easy ELF dependency closure lock is missing")
+        if (
+            any(
+                not isinstance(name, str)
+                or not name
+                or "/" in name
+                or "\\" in name
+                for name in system_allowlist_value
+            )
+        ):
+            raise VerifyError("Detect It Easy ELF system allowlist is invalid")
+        system_allowlist = set(system_allowlist_value)
+        if system_allowlist != LINUX_ELF_SYSTEM_ALLOWLIST:
+            raise VerifyError(
+                "Detect It Easy ELF system allowlist differs from the reviewed baseline"
+            )
+        expected_files = {"diec", *runtime_names}
+        if set(needed_lock) != expected_files:
+            raise VerifyError(
+                "Detect It Easy ELF closure file set differs from the staged runtime"
+            )
+        bundled_libraries = expected_files - {"diec"}
+        observed_dependencies: set[str] = set()
+        for name in sorted(expected_files):
+            expected_needed = needed_lock.get(name)
+            if not isinstance(expected_needed, list) or any(
+                not isinstance(dependency, str) for dependency in expected_needed
+            ):
+                raise VerifyError(
+                    f"Detect It Easy ELF dependency lock is invalid: {name}"
+                )
+            file_path = executable if name == "diec" else target_dir / "die" / name
+            actual_needed, soname = elf_dynamic_metadata(file_path)
+            if actual_needed != expected_needed:
+                raise VerifyError(
+                    f"Detect It Easy ELF dependencies differ for {name}; "
+                    f"expected={expected_needed}, actual={actual_needed}"
+                )
+            expected_soname = None if name == "diec" else name
+            if soname != expected_soname:
+                raise VerifyError(
+                    f"Detect It Easy ELF SONAME differs for {name}; "
+                    f"expected={expected_soname!r}, actual={soname!r}"
+                )
+            observed_dependencies.update(actual_needed)
+        unresolved = observed_dependencies - bundled_libraries - system_allowlist
+        if unresolved:
+            raise VerifyError(
+                "Detect It Easy ELF closure has unbundled dependencies: "
+                f"{sorted(unresolved)}"
+            )
+        unused_libraries = bundled_libraries - observed_dependencies
+        if unused_libraries:
+            raise VerifyError(
+                "Detect It Easy bundle contains unreferenced runtime libraries: "
+                f"{sorted(unused_libraries)}"
+            )
     else:
         version = artifact["frameworkVersion"]
         for name in artifact["frameworks"]:

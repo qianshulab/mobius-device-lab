@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "bundleRevision": 6,
+  "bundleRevision": 7,
   "components": {
     "scrcpy": {
       "version": "4.1",
@@ -782,7 +782,12 @@
             "qtbase-5.12.8",
             "qtscript-5.12.8",
             "icu-66.1",
-            "icu-66.1-ubuntu-patches"
+            "icu-66.1-ubuntu-patches",
+            "double-conversion-3.1.5",
+            "glib-2.64.6",
+            "pcre2-10.34",
+            "pcre-8.39",
+            "zlib-1.2.11-dfsg"
           ],
           "icuRuntime": {
             "version": "66.1-2ubuntu2.1",
@@ -816,6 +821,233 @@
               }
             ],
             "notice": "share/doc/libicu66/copyright"
+          },
+          "linuxRuntimePackages": [
+            {
+              "name": "double-conversion",
+              "version": "3.1.5-4ubuntu1",
+              "license": "BSD-3-Clause",
+              "projectUrl": "https://github.com/google/double-conversion",
+              "artifact": {
+                "url": "https://archive.ubuntu.com/ubuntu/pool/universe/d/double-conversion/libdouble-conversion3_3.1.5-4ubuntu1_amd64.deb",
+                "size": 37880,
+                "sha256": "513dbea99f8f3bcd962f446b9c529539f2446a32fdca0841b5a0711542f1875b",
+                "archive": "deb",
+                "fileName": "libdouble-conversion3_3.1.5-4ubuntu1_amd64.deb",
+                "dataMember": {
+                  "name": "data.tar.xz",
+                  "size": 35760,
+                  "sha256": "f1edcc4ee5086726ed8d6dbcdfd0289965157d55774d65b56f5e35602bec92df"
+                }
+              },
+              "runtimeFiles": [
+                {
+                  "path": "usr/lib/x86_64-linux-gnu/libdouble-conversion.so.3.1",
+                  "destination": "libdouble-conversion.so.3"
+                }
+              ],
+              "sourceDependencies": [
+                "double-conversion-3.1.5"
+              ],
+              "notice": "usr/share/doc/libdouble-conversion3/copyright",
+              "noticeDestination": "licenses/die-linux-double-conversion-copyright.txt"
+            },
+            {
+              "name": "glib",
+              "version": "2.64.6-1~ubuntu20.04.9",
+              "license": "LGPL-2.1-or-later",
+              "projectUrl": "https://gitlab.gnome.org/GNOME/glib",
+              "artifact": {
+                "url": "https://security.ubuntu.com/ubuntu/pool/main/g/glib2.0/libglib2.0-0_2.64.6-1~ubuntu20.04.9_amd64.deb",
+                "size": 1289696,
+                "sha256": "459d8f08c5e3e8c0454b1cb16660fc7a11274729c83bd41886e5a1388feeddbd",
+                "archive": "deb",
+                "fileName": "libglib2.0-0_2.64.6-1~ubuntu20.04.9_amd64.deb",
+                "dataMember": {
+                  "name": "data.tar.xz",
+                  "size": 1267120,
+                  "sha256": "ab91ca6814a694f47067fd3f8bea04867c5b5269094550258ac117acc6022eba"
+                }
+              },
+              "runtimeFiles": [
+                {
+                  "path": "usr/lib/x86_64-linux-gnu/libglib-2.0.so.0.6400.6",
+                  "destination": "libglib-2.0.so.0"
+                }
+              ],
+              "sourceDependencies": [
+                "glib-2.64.6"
+              ],
+              "notice": "usr/share/doc/libglib2.0-0/copyright",
+              "noticeDestination": "licenses/die-linux-glib-copyright.txt"
+            },
+            {
+              "name": "pcre2-16",
+              "version": "10.34-7ubuntu0.1",
+              "license": "BSD-3-Clause",
+              "projectUrl": "https://www.pcre.org/",
+              "artifact": {
+                "url": "https://security.ubuntu.com/ubuntu/pool/main/p/pcre2/libpcre2-16-0_10.34-7ubuntu0.1_amd64.deb",
+                "size": 181280,
+                "sha256": "db6f6ab7f77cc9cd1b48222c2ec44aa96a3890207f51d7e649feae5b4f53aaa0",
+                "archive": "deb",
+                "fileName": "libpcre2-16-0_10.34-7ubuntu0.1_amd64.deb",
+                "dataMember": {
+                  "name": "data.tar.xz",
+                  "size": 179552,
+                  "sha256": "b0320d824d4fbbf2dc2b30382c2646aa06d77c3978f066596b98a450298ec03d"
+                }
+              },
+              "runtimeFiles": [
+                {
+                  "path": "usr/lib/x86_64-linux-gnu/libpcre2-16.so.0.9.0",
+                  "destination": "libpcre2-16.so.0"
+                }
+              ],
+              "sourceDependencies": [
+                "pcre2-10.34"
+              ],
+              "notice": "usr/share/doc/libpcre2-16-0/copyright",
+              "noticeDestination": "licenses/die-linux-pcre2-copyright.txt"
+            },
+            {
+              "name": "pcre",
+              "version": "2:8.39-12ubuntu0.1",
+              "license": "BSD-3-Clause",
+              "projectUrl": "https://www.pcre.org/",
+              "artifact": {
+                "url": "https://security.ubuntu.com/ubuntu/pool/main/p/pcre3/libpcre3_8.39-12ubuntu0.1_amd64.deb",
+                "size": 232396,
+                "sha256": "98c25f98cc8df949e774a7ebaff509c37a6baea4dab83786a3c1efecb850bfae",
+                "archive": "deb",
+                "fileName": "libpcre3_8.39-12ubuntu0.1_amd64.deb",
+                "dataMember": {
+                  "name": "data.tar.xz",
+                  "size": 230688,
+                  "sha256": "6b9439e51981a2c7513c304f3192a7dcb4a9b72f8ca44ed9ad734111a1891467"
+                }
+              },
+              "runtimeFiles": [
+                {
+                  "path": "lib/x86_64-linux-gnu/libpcre.so.3.13.3",
+                  "destination": "libpcre.so.3"
+                }
+              ],
+              "sourceDependencies": [
+                "pcre-8.39"
+              ],
+              "notice": "usr/share/doc/libpcre3/copyright",
+              "noticeDestination": "licenses/die-linux-pcre-copyright.txt"
+            },
+            {
+              "name": "zlib",
+              "version": "1:1.2.11.dfsg-2ubuntu1.5",
+              "license": "Zlib",
+              "projectUrl": "https://zlib.net/",
+              "artifact": {
+                "url": "https://security.ubuntu.com/ubuntu/pool/main/z/zlib/zlib1g_1.2.11.dfsg-2ubuntu1.5_amd64.deb",
+                "size": 54164,
+                "sha256": "bf67018f5303466eb468680b637a5d3f3bb17b9d44decf3d82d40b35babcd3e0",
+                "archive": "deb",
+                "fileName": "zlib1g_1.2.11.dfsg-2ubuntu1.5_amd64.deb",
+                "dataMember": {
+                  "name": "data.tar.xz",
+                  "size": 52448,
+                  "sha256": "9214d15abe69cc9ba6820259957820d89e67d04caee45c015349395b02ac58c4"
+                }
+              },
+              "runtimeFiles": [
+                {
+                  "path": "lib/x86_64-linux-gnu/libz.so.1.2.11",
+                  "destination": "libz.so.1"
+                }
+              ],
+              "sourceDependencies": [
+                "zlib-1.2.11-dfsg"
+              ],
+              "notice": "usr/share/doc/zlib1g/copyright",
+              "noticeDestination": "licenses/die-linux-zlib-copyright.txt"
+            }
+          ],
+          "elfSystemAllowlist": [
+            "ld-linux-x86-64.so.2",
+            "libc.so.6",
+            "libdl.so.2",
+            "libgcc_s.so.1",
+            "libm.so.6",
+            "libpthread.so.0",
+            "libstdc++.so.6"
+          ],
+          "elfNeeded": {
+            "diec": [
+              "libQt5Script.so.5",
+              "libQt5Core.so.5",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6"
+            ],
+            "libQt5Core.so.5": [
+              "libpthread.so.0",
+              "libz.so.1",
+              "libicui18n.so.66",
+              "libicuuc.so.66",
+              "libdl.so.2",
+              "libpcre2-16.so.0",
+              "libdouble-conversion.so.3",
+              "libglib-2.0.so.0",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "libQt5Script.so.5": [
+              "libQt5Core.so.5",
+              "libpthread.so.0",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libc.so.6"
+            ],
+            "libicudata.so.66": [],
+            "libicui18n.so.66": [
+              "libicuuc.so.66",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6"
+            ],
+            "libicuuc.so.66": [
+              "libicudata.so.66",
+              "libpthread.so.0",
+              "libdl.so.2",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "libdouble-conversion.so.3": [
+              "libstdc++.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6"
+            ],
+            "libglib-2.0.so.0": [
+              "libpcre.so.3",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "libpcre2-16.so.0": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "libpcre.so.3": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "libz.so.1": [
+              "libc.so.6"
+            ]
           }
         },
         "macos-aarch64": {
@@ -1072,6 +1304,186 @@
             }
           ],
           "linkage": "build-source"
+        },
+        "double-conversion-3.1.5": {
+          "version": "3.1.5-4ubuntu1",
+          "license": "BSD-3-Clause",
+          "projectUrl": "https://launchpad.net/ubuntu/+source/double-conversion/3.1.5-4ubuntu1",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/universe/d/double-conversion/double-conversion_3.1.5.orig.tar.gz",
+            "size": 7023792,
+            "sha256": "a63ecb93182134ba4293fd5f22d6e08ca417caafa244afaa751cbfddf6415b13",
+            "archive": "tar.gz",
+            "root": "double-conversion-3.1.5",
+            "fileName": "double-conversion_3.1.5.orig.tar.gz"
+          },
+          "supplementalSources": [
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/universe/d/double-conversion/double-conversion_3.1.5-4ubuntu1.dsc",
+              "size": 2324,
+              "sha256": "750c2f6d14f63856a9ae79e8cf21fa436539dced8f4e73c3aa68957c3dbf2852",
+              "archive": "raw",
+              "fileName": "double-conversion_3.1.5-4ubuntu1.dsc"
+            },
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/universe/d/double-conversion/double-conversion_3.1.5-4ubuntu1.debian.tar.xz",
+              "size": 6576,
+              "sha256": "996b8afc3cd91f35f996ca6735ff06d93df454ef53ea97664584b707f7f5965a",
+              "archive": "tar.xz",
+              "fileName": "double-conversion_3.1.5-4ubuntu1.debian.tar.xz"
+            }
+          ],
+          "licenseFiles": [
+            {
+              "path": "LICENSE",
+              "destination": "licenses/die-double-conversion-LICENSE.txt"
+            }
+          ],
+          "linkage": "shared"
+        },
+        "glib-2.64.6": {
+          "version": "2.64.6-1~ubuntu20.04.9",
+          "license": "LGPL-2.1-or-later",
+          "projectUrl": "https://launchpad.net/ubuntu/+source/glib2.0/2.64.6-1~ubuntu20.04.9",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/glib2.0_2.64.6.orig.tar.xz",
+            "size": 4781576,
+            "sha256": "c36ee07a70164c71f046016fe6aaacd6368333c42590bc0cba47c344ffb853f1",
+            "archive": "tar.xz",
+            "root": "glib-2.64.6",
+            "fileName": "glib2.0_2.64.6.orig.tar.xz"
+          },
+          "supplementalSources": [
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/glib2.0_2.64.6-1~ubuntu20.04.9.dsc",
+              "size": 3338,
+              "sha256": "30df29e08162a1e38f7e83819d07bc18d8c2f6667a40c6a24a7e7c3761f723e6",
+              "archive": "raw",
+              "fileName": "glib2.0_2.64.6-1~ubuntu20.04.9.dsc"
+            },
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/glib2.0_2.64.6-1~ubuntu20.04.9.debian.tar.xz",
+              "size": 150280,
+              "sha256": "049ab2d89b1cf703013678e716dada54b35acd328151afb0ed4efaf30d40a0c9",
+              "archive": "tar.xz",
+              "fileName": "glib2.0_2.64.6-1~ubuntu20.04.9.debian.tar.xz"
+            }
+          ],
+          "licenseFiles": [
+            {
+              "path": "COPYING",
+              "destination": "licenses/die-glib-COPYING.txt"
+            }
+          ],
+          "linkage": "shared"
+        },
+        "pcre2-10.34": {
+          "version": "10.34-7ubuntu0.1",
+          "license": "BSD-3-Clause",
+          "projectUrl": "https://launchpad.net/ubuntu/+source/pcre2/10.34-7ubuntu0.1",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pcre2/pcre2_10.34.orig.tar.gz",
+            "size": 2271533,
+            "sha256": "da6aba7ba2509e918e41f4f744a59fa41a2425c59a298a232e7fe85691e00379",
+            "archive": "tar.gz",
+            "root": "pcre2-10.34",
+            "fileName": "pcre2_10.34.orig.tar.gz"
+          },
+          "supplementalSources": [
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pcre2/pcre2_10.34-7ubuntu0.1.dsc",
+              "size": 2142,
+              "sha256": "0656db93f7b0c3a36d726a1d613424c0b4271b9480230d52dcf4e4d5d836b578",
+              "archive": "raw",
+              "fileName": "pcre2_10.34-7ubuntu0.1.dsc"
+            },
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pcre2/pcre2_10.34-7ubuntu0.1.diff.gz",
+              "size": 10945,
+              "sha256": "561b5de2ceebb63d8916fdddfeb5dff5e9dac9eeb609d63d762930adb6e485bc",
+              "archive": "raw",
+              "fileName": "pcre2_10.34-7ubuntu0.1.diff.gz"
+            }
+          ],
+          "licenseFiles": [
+            {
+              "path": "LICENCE",
+              "destination": "licenses/die-pcre2-LICENCE.txt"
+            }
+          ],
+          "linkage": "shared"
+        },
+        "pcre-8.39": {
+          "version": "2:8.39-12ubuntu0.1",
+          "license": "BSD-3-Clause",
+          "projectUrl": "https://launchpad.net/ubuntu/+source/pcre3/2:8.39-12ubuntu0.1",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/pcre3_8.39.orig.tar.bz2",
+            "size": 1560758,
+            "sha256": "b858099f82483031ee02092711689e7245586ada49e534a06e678b8ea9549e8b",
+            "archive": "tar.bz2",
+            "root": "pcre-8.39",
+            "fileName": "pcre3_8.39.orig.tar.bz2"
+          },
+          "supplementalSources": [
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/pcre3_8.39-12ubuntu0.1.dsc",
+              "size": 2077,
+              "sha256": "7a762acfc0ca4e63d89c4864284b6d8a56651993ff45fc5389db7370531dc2b3",
+              "archive": "raw",
+              "fileName": "pcre3_8.39-12ubuntu0.1.dsc"
+            },
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pcre3/pcre3_8.39-12ubuntu0.1.debian.tar.gz",
+              "size": 27476,
+              "sha256": "8263c7a0896b9deaf51b2a28adf2a187d4fe46eb1a44963c9d054a758117ccc6",
+              "archive": "tar.gz",
+              "fileName": "pcre3_8.39-12ubuntu0.1.debian.tar.gz"
+            }
+          ],
+          "licenseFiles": [
+            {
+              "path": "LICENCE",
+              "destination": "licenses/die-pcre-LICENCE.txt"
+            }
+          ],
+          "linkage": "shared"
+        },
+        "zlib-1.2.11-dfsg": {
+          "version": "1:1.2.11.dfsg-2ubuntu1.5",
+          "license": "Zlib",
+          "projectUrl": "https://launchpad.net/ubuntu/+source/zlib/1:1.2.11.dfsg-2ubuntu1.5",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/main/z/zlib/zlib_1.2.11.dfsg.orig.tar.gz",
+            "size": 370248,
+            "sha256": "80c481411a4fe8463aeb8270149a0e80bb9eaf7da44132b6e16f2b5af01bc899",
+            "archive": "tar.gz",
+            "root": "zlib-1.2.11.dfsg",
+            "fileName": "zlib_1.2.11.dfsg.orig.tar.gz"
+          },
+          "supplementalSources": [
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/z/zlib/zlib_1.2.11.dfsg-2ubuntu1.5.dsc",
+              "size": 2649,
+              "sha256": "406e60b3c9311249b151a4e784ed3e146413fdb686a129c628da91397bb751f7",
+              "archive": "raw",
+              "fileName": "zlib_1.2.11.dfsg-2ubuntu1.5.dsc"
+            },
+            {
+              "url": "https://archive.ubuntu.com/ubuntu/pool/main/z/zlib/zlib_1.2.11.dfsg-2ubuntu1.5.debian.tar.xz",
+              "size": 56436,
+              "sha256": "09b9d80f1c3a02f7019a3991fedf7679a21092c57eaf8eb4bf58eee709b22ef9",
+              "archive": "tar.xz",
+              "fileName": "zlib_1.2.11.dfsg-2ubuntu1.5.debian.tar.xz"
+            }
+          ],
+          "licenseFiles": [
+            {
+              "path": "zlib.h",
+              "destination": "licenses/die-linux-zlib-LICENSE.h.txt"
+            }
+          ],
+          "linkage": "shared"
         }
       }
     }
