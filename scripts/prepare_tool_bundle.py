@@ -1040,8 +1040,8 @@ def stage_ffmpeg(
         configure.append("--disable-x86asm")
     run(configure, source, environment)
     jobs = max(1, min(os.cpu_count() or 2, 4))
-    run(["make", f"-j{jobs}", "ffmpeg"], source, environment)
     executable = "ffmpeg.exe" if target.startswith("windows-") else "ffmpeg"
+    run(["make", f"-j{jobs}", executable], source, environment)
     built = source / executable
     stager.copy(built, executable, "ffmpeg", executable=True)
     stager.copy(

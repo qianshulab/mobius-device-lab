@@ -484,11 +484,69 @@ jobs:
           prerelease: ${{ needs.prepare.outputs.prerelease }}
           uploadUpdaterJson: false
           uploadUpdaterSignatures: false
-          uploadWorkflowArtifacts: true
+          uploadWorkflowArtifacts: ${{ runner.os != 'Linux' }}
           workflowArtifactNamePattern: "mobius-[platform]-[arch]-[bundle]"
           releaseAssetNamePattern: "Mobius-Device-Lab_[version]_[platform]_[arch][setup][ext]"
           retryAttempts: 2
           args: --target ${{ matrix.rust_target }} --bundles ${{ matrix.bundles }}
+
+      - name: Finalize and replace AppImage after linuxdeploy normalization
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          target_root="src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage"
+          appdirs=("$target_root"/*.AppDir)
+          appimages=("$target_root"/*.AppImage)
+          if [[ "${#appdirs[@]}" -ne 1 || "${#appimages[@]}" -ne 1 ]]; then
+            echo "Expected one AppDir and one AppImage." >&2
+            exit 1
+          fi
+
+          mapfile -t manifests < <(
+            find "${appdirs[0]}" -type f \
+              -path "*/resources/tools/linux-x86_64/manifest.json" -print
+          )
+          if [[ "${#manifests[@]}" -ne 1 ]]; then
+            echo "Expected one AppImage tool manifest." >&2
+            exit 1
+          fi
+          bundle_dir="$(dirname "${manifests[0]}")"
+          tools_root="$(dirname "$bundle_dir")"
+          python3 scripts/refresh_tool_manifest.py --bundle "$bundle_dir"
+          python3 scripts/verify_tool_bundle.py \
+            --lock packaging/toolchain.lock.json \
+            --target "${{ matrix.resource_target }}" \
+            --root "$tools_root"
+
+          cache_root="${XDG_CACHE_HOME:-$HOME/.cache}"
+          plugin="$cache_root/tauri/linuxdeploy-plugin-appimage.AppImage"
+          if [[ ! -x "$plugin" ]]; then
+            echo "Tauri's downloaded AppImage output plugin was not found." >&2
+            exit 1
+          fi
+          rebuilt="$RUNNER_TEMP/mobius-repacked.AppImage"
+          env \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            ARCH=x86_64 \
+            LDAI_OUTPUT="$rebuilt" \
+            VERSION="$RELEASE_VERSION" \
+            "$plugin" --appimage-extract-and-run --appdir "${appdirs[0]}"
+          if [[ ! -s "$rebuilt" ]]; then
+            echo "Repacked AppImage was not created." >&2
+            exit 1
+          fi
+          install -m 0755 "$rebuilt" "${appimages[0]}"
+
+          release_asset="$RUNNER_TEMP/Mobius-Device-Lab_${RELEASE_VERSION}_linux_amd64.AppImage"
+          cp "${appimages[0]}" "$release_asset"
+          gh release upload "$RELEASE_TAG" "$release_asset" --clobber
 
       - name: Verify toolchain inside Windows installer
         if: runner.os == 'Windows'

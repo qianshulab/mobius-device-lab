@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh staged file hashes after native code signing changes Mach-O bytes."""
+"""Refresh staged file hashes after native packaging changes executable bytes."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def main() -> int:
         newline="\n",
     )
     os.replace(temporary, manifest_path)
-    print(f"Refreshed signed bundle manifest: {manifest_path}")
+    print(f"Refreshed packaged bundle manifest: {manifest_path}")
     return 0
 
 
