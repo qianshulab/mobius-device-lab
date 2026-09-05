@@ -47,7 +47,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Verify versions and create draft release
         id: release
@@ -210,7 +210,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -230,13 +230,13 @@ jobs:
             xdg-utils
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 10.12.1
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -250,7 +250,7 @@ jobs:
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          workspaces: src-tauri -> src-tauri/target
+          workspaces: src-tauri -> target
           key: ${{ matrix.rust_target }}
 
       - name: Install frontend dependencies
@@ -259,30 +259,56 @@ jobs:
       - name: Check frontend types
         run: pnpm run check
 
-      - name: Use ad-hoc signing when no macOS identity is configured
+      - name: Configure macOS signing
         if: runner.os == 'macOS'
         shell: bash
         env:
+          CONFIGURED_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          CONFIGURED_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           CONFIGURED_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CONFIGURED_APPLE_ID: ${{ secrets.APPLE_ID }}
+          CONFIGURED_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          CONFIGURED_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [[ -n "$CONFIGURED_IDENTITY" ]]; then
-            echo "APPLE_SIGNING_IDENTITY=$CONFIGURED_IDENTITY" >> "$GITHUB_ENV"
+          set -euo pipefail
+
+          write_environment_value() {
+            local variable_name="$1"
+            local variable_value="$2"
+            local delimiter="MOBIUS_${variable_name}_${RANDOM}_${RANDOM}"
+            {
+              echo "${variable_name}<<${delimiter}"
+              printf '%s\n' "$variable_value"
+              echo "$delimiter"
+            } >> "$GITHUB_ENV"
+          }
+
+          if [[ -n "$CONFIGURED_CERTIFICATE" || -n "$CONFIGURED_CERTIFICATE_PASSWORD" || -n "$CONFIGURED_IDENTITY" ]]; then
+            if [[ -z "$CONFIGURED_CERTIFICATE" || -z "$CONFIGURED_CERTIFICATE_PASSWORD" || -z "$CONFIGURED_IDENTITY" ]]; then
+              echo "APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, and APPLE_SIGNING_IDENTITY must be configured together." >&2
+              exit 1
+            fi
+            write_environment_value APPLE_CERTIFICATE "$CONFIGURED_CERTIFICATE"
+            write_environment_value APPLE_CERTIFICATE_PASSWORD "$CONFIGURED_CERTIFICATE_PASSWORD"
+            write_environment_value APPLE_SIGNING_IDENTITY "$CONFIGURED_IDENTITY"
           else
-            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            write_environment_value APPLE_SIGNING_IDENTITY "-"
+          fi
+
+          if [[ -n "$CONFIGURED_APPLE_ID" || -n "$CONFIGURED_APPLE_PASSWORD" || -n "$CONFIGURED_APPLE_TEAM_ID" ]]; then
+            if [[ -z "$CONFIGURED_CERTIFICATE" || -z "$CONFIGURED_APPLE_ID" || -z "$CONFIGURED_APPLE_PASSWORD" || -z "$CONFIGURED_APPLE_TEAM_ID" ]]; then
+              echo "APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID require a complete signing certificate configuration and must be configured together." >&2
+              exit 1
+            fi
+            write_environment_value APPLE_ID "$CONFIGURED_APPLE_ID"
+            write_environment_value APPLE_PASSWORD "$CONFIGURED_APPLE_PASSWORD"
+            write_environment_value APPLE_TEAM_ID "$CONFIGURED_APPLE_TEAM_ID"
           fi
 
       - name: Build and upload native package
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-          # Optional Developer ID signing and notarization. Without these
-          # secrets, macOS packages are ad-hoc signed for test distribution.
-          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}
@@ -301,24 +327,99 @@ jobs:
     needs: [prepare, build]
     runs-on: ubuntu-22.04
     permissions:
-      actions: read
       contents: write
 
     steps:
-      - name: Download all native packages
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          pattern: mobius-*
-          path: release-artifacts
-          merge-multiple: true
-
-      - name: Generate SHA-256 checksums
+      - name: Download and verify release packages
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          cd release-artifacts
-          find . -type f -print0 \
-            | LC_ALL=C sort -z \
-            | xargs -0 sha256sum > ../SHA256SUMS.txt
+          set -euo pipefail
+
+          expected_assets=(
+            "Mobius-Device-Lab_${RELEASE_VERSION}_darwin_aarch64.dmg"
+            "Mobius-Device-Lab_${RELEASE_VERSION}_darwin_x64.dmg"
+            "Mobius-Device-Lab_${RELEASE_VERSION}_linux_amd64.AppImage"
+            "Mobius-Device-Lab_${RELEASE_VERSION}_linux_amd64.deb"
+            "Mobius-Device-Lab_${RELEASE_VERSION}_windows_x64-setup.exe"
+          )
+
+          declare -A expected_lookup=()
+          declare -A downloaded_lookup=()
+          for asset_name in "${expected_assets[@]}"; do
+            expected_lookup["$asset_name"]=1
+          done
+
+          mapfile -t release_assets < <(
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" \
+              --jq '.[] | select(.name != "SHA256SUMS.txt") | @base64'
+          )
+
+          if [[ "${#release_assets[@]}" -ne "${#expected_assets[@]}" ]]; then
+            echo "Expected ${#expected_assets[@]} native packages, found ${#release_assets[@]}." >&2
+            exit 1
+          fi
+
+          mkdir -p release-artifacts
+          for encoded_asset in "${release_assets[@]}"; do
+            asset_json="$(printf '%s' "$encoded_asset" | base64 --decode)"
+            asset_id="$(jq -r '.id' <<< "$asset_json")"
+            asset_name="$(jq -r '.name' <<< "$asset_json")"
+            asset_size="$(jq -r '.size' <<< "$asset_json")"
+            asset_digest="$(jq -r '.digest // ""' <<< "$asset_json")"
+            asset_state="$(jq -r '.state' <<< "$asset_json")"
+
+            if [[ -z "${expected_lookup[$asset_name]+present}" ]]; then
+              echo "Unexpected release asset: $asset_name" >&2
+              exit 1
+            fi
+            if [[ -n "${downloaded_lookup[$asset_name]+present}" ]]; then
+              echo "Duplicate release asset: $asset_name" >&2
+              exit 1
+            fi
+            if [[ "$asset_state" != "uploaded" ]]; then
+              echo "Release asset is not ready: $asset_name ($asset_state)" >&2
+              exit 1
+            fi
+            if [[ ! "$asset_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Release asset has no valid GitHub SHA-256 digest: $asset_name" >&2
+              exit 1
+            fi
+
+            destination="release-artifacts/$asset_name"
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" \
+              > "$destination"
+
+            actual_size="$(stat -c '%s' "$destination")"
+            actual_digest="$(sha256sum "$destination" | cut -d ' ' -f 1)"
+            if [[ "$actual_size" != "$asset_size" ]]; then
+              echo "Size mismatch for $asset_name: expected $asset_size, downloaded $actual_size" >&2
+              exit 1
+            fi
+            if [[ "sha256:$actual_digest" != "$asset_digest" ]]; then
+              echo "Digest mismatch for $asset_name." >&2
+              exit 1
+            fi
+            downloaded_lookup["$asset_name"]=1
+          done
+
+          for asset_name in "${expected_assets[@]}"; do
+            if [[ -z "${downloaded_lookup[$asset_name]+present}" ]]; then
+              echo "Missing release asset: $asset_name" >&2
+              exit 1
+            fi
+          done
+
+          (
+            cd release-artifacts
+            sha256sum -- "${expected_assets[@]}" | LC_ALL=C sort -k2
+          ) > SHA256SUMS.txt
 
       - name: Upload checksum manifest
         env:

@@ -6,6 +6,7 @@ src-tauri/target/
 Thumbs.db
 .idea/
 .vscode/
+.serena/
 coverage/
 .pnpm-store/
 *.swp
