@@ -157,12 +157,27 @@ jobs:
               core.info(`Created draft release ${release.id} for ${tag}`);
             }
 
+            const releaseWasPublished = !release.draft;
+            const publishAfterBuild = publish || releaseWasPublished;
+            if (releaseWasPublished) {
+              const response = await github.rest.repos.updateRelease({
+                owner,
+                repo,
+                release_id: release.id,
+                draft: true,
+              });
+              release = response.data;
+              core.notice(
+                `Temporarily returned ${tag} to draft while its packages are rebuilt`,
+              );
+            }
+
             core.setOutput("version", version);
             core.setOutput("tag", tag);
             core.setOutput("release_id", String(release.id));
             core.setOutput("release_draft", String(release.draft));
             core.setOutput("prerelease", String(prerelease));
-            core.setOutput("publish", String(publish || !release.draft));
+            core.setOutput("publish", String(publishAfterBuild));
             await core.summary
               .addHeading("Release preparation")
               .addTable([
@@ -176,7 +191,7 @@ jobs:
                   version,
                   tag,
                   String(release.id),
-                  publish || !release.draft ? "published" : "draft",
+                  publishAfterBuild ? "published" : "draft",
                 ],
               ])
               .write();
