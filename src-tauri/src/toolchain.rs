@@ -574,10 +574,12 @@ fn deduplicate_paths(paths: &mut Vec<PathBuf>) {
 
 #[cfg(windows)]
 fn reject_unsafe_windows_path(path: &Path, label: &str) -> AppResult<()> {
-    if path.to_string_lossy().starts_with(r"\\") {
+    if windows_path_uses_unsafe_namespace(&path.to_string_lossy()) {
         return Err(ApiError::new(
             "unsafe_tool_path",
-            format!("Refusing to use {label} from a network share"),
+            format!(
+                "Refusing to use {label} from a network share or unsupported Windows path namespace"
+            ),
         ));
     }
     Ok(())
@@ -586,6 +588,19 @@ fn reject_unsafe_windows_path(path: &Path, label: &str) -> AppResult<()> {
 #[cfg(not(windows))]
 fn reject_unsafe_windows_path(_path: &Path, _label: &str) -> AppResult<()> {
     Ok(())
+}
+
+/// Windows canonicalization represents an ordinary local path as
+/// `\\?\C:\tools\adb.exe`. Accept that verbatim drive form without also
+/// accepting UNC shares, device paths, volume GUIDs, or drive-relative paths.
+#[cfg(any(windows, test))]
+fn windows_path_uses_unsafe_namespace(value: &str) -> bool {
+    let normalized = value.replace('/', r"\");
+    let Some(verbatim) = normalized.strip_prefix(r"\\?\") else {
+        return normalized.starts_with(r"\\");
+    };
+    let bytes = verbatim.as_bytes();
+    !(bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\')
 }
 
 #[cfg(test)]
@@ -774,6 +789,34 @@ mod tests {
         })
         .expect_err("relative tools directory must be rejected");
         assert_eq!(error.code, "invalid_tool_directory");
+    }
+
+    #[test]
+    fn windows_path_classifier_distinguishes_local_verbatim_paths_from_unc() {
+        for local in [
+            r"C:\tools\adb.exe",
+            r"\\?\C:\tools\adb.exe",
+            r"\\?\z:\managed tools\scrcpy.exe",
+        ] {
+            assert!(
+                !windows_path_uses_unsafe_namespace(local),
+                "local Windows path was rejected: {local}"
+            );
+        }
+
+        for unsafe_path in [
+            r"\\server\share\adb.exe",
+            r"//server/share/adb.exe",
+            r"\\?\UNC\server\share\adb.exe",
+            r"\\.\PhysicalDrive0",
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\adb.exe",
+            r"\\?\C:relative\adb.exe",
+        ] {
+            assert!(
+                windows_path_uses_unsafe_namespace(unsafe_path),
+                "unsafe Windows namespace was accepted: {unsafe_path}"
+            );
+        }
     }
 
     #[test]

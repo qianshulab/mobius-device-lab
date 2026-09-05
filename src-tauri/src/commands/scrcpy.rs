@@ -4,11 +4,12 @@ use crate::{
         AndroidScreenStreamRequest, AndroidScreenStreamResult, ApiError, ApiResult, AppResult,
         OperationResult, ScrcpyRequest, StopAndroidScreenStreamRequest,
     },
-    runner::{background_command, resolve_tool, run_process_at},
+    runner::{background_command, resolve_tool, run_process_at, run_process_at_with_env},
     state::{AppState, ManagedAndroidScreenStream},
     validation,
 };
 use std::{
+    ffi::OsString,
     fs,
     io::{self, Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
@@ -69,7 +70,8 @@ pub async fn launch_scrcpy(request: ScrcpyRequest) -> ApiResult<OperationResult>
         }
 
         let executable = resolve_tool("scrcpy")?;
-        let mut child = background_command(executable)
+        let adb = resolve_tool("adb")?;
+        let mut child = scrcpy_client_command(&executable, &adb)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -217,7 +219,7 @@ fn start_screen_stream(
             "Embedded live video needs ffmpeg. Put ffmpeg in the managed tools directory or install it on this computer.",
         )
     })?;
-    let (server_version, server_path) = resolve_matching_scrcpy_server(&scrcpy)?;
+    let (server_version, server_path) = resolve_matching_scrcpy_server(&scrcpy, &adb)?;
 
     let state_output = run_process_at(
         "adb",
@@ -822,13 +824,15 @@ fn allowed_stream_origin(origin: &str) -> bool {
     )
 }
 
-fn resolve_matching_scrcpy_server(scrcpy: &Path) -> AppResult<(String, PathBuf)> {
-    let version_output = run_process_at(
+fn resolve_matching_scrcpy_server(scrcpy: &Path, adb: &Path) -> AppResult<(String, PathBuf)> {
+    let environment = scrcpy_environment(adb);
+    let version_output = run_process_at_with_env(
         "scrcpy",
         scrcpy,
         &["--version".into()],
         STREAM_PROCESS_TIMEOUT,
         &[],
+        &environment,
     )?;
     let combined = format!("{}\n{}", version_output.stdout, version_output.stderr);
     let version = parse_scrcpy_version(&combined).ok_or_else(|| {
@@ -870,6 +874,16 @@ fn resolve_matching_scrcpy_server(scrcpy: &Path) -> AppResult<(String, PathBuf)>
         "scrcpy_server_unavailable",
         "The matching scrcpy-server file was not found next to this scrcpy installation. Install the complete official scrcpy package or set SCRCPY_SERVER_PATH.",
     ))
+}
+
+fn scrcpy_client_command(scrcpy: &Path, adb: &Path) -> std::process::Command {
+    let mut command = background_command(scrcpy);
+    command.envs(scrcpy_environment(adb));
+    command
+}
+
+fn scrcpy_environment(adb: &Path) -> [(OsString, OsString); 1] {
+    [(OsString::from("ADB"), adb.as_os_str().to_os_string())]
 }
 
 fn parse_scrcpy_version(output: &str) -> Option<String> {
@@ -1196,6 +1210,30 @@ mod tests {
         );
         assert_eq!(parse_scrcpy_version("scrcpy 4.0;touch_bad\n"), None);
         assert_eq!(parse_scrcpy_version("not scrcpy\n"), None);
+    }
+
+    #[test]
+    fn scrcpy_command_receives_the_resolved_adb_path() {
+        #[cfg(windows)]
+        let (scrcpy, adb) = (
+            Path::new(r"C:\managed tools\scrcpy.exe"),
+            Path::new(r"C:\Android SDK\platform-tools\adb.exe"),
+        );
+        #[cfg(not(windows))]
+        let (scrcpy, adb) = (
+            Path::new("/managed tools/scrcpy"),
+            Path::new("/Android SDK/platform-tools/adb"),
+        );
+
+        let command = scrcpy_client_command(scrcpy, adb);
+        assert_eq!(command.get_program(), scrcpy.as_os_str());
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new("ADB"))
+                .and_then(|(_, value)| value),
+            Some(adb.as_os_str())
+        );
     }
 
     #[test]

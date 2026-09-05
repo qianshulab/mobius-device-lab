@@ -4,7 +4,7 @@ use crate::{
 };
 use serde::Serialize;
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -91,7 +91,11 @@ pub(crate) fn run_checked_with_env(
     secrets: &[&str],
     environment: &[(String, String)],
 ) -> AppResult<ProcessOutput> {
-    let output = run_process_inner(program, args, timeout, secrets, None, environment)?;
+    let environment = environment
+        .iter()
+        .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+        .collect::<Vec<_>>();
+    let output = run_process_inner(program, args, timeout, secrets, None, &environment)?;
     if output.timed_out {
         return Err(ApiError::new(
             "process_timeout",
@@ -164,7 +168,7 @@ fn run_process_inner(
     timeout: Duration,
     secrets: &[&str],
     stdin_bytes: Option<&[u8]>,
-    environment: &[(String, String)],
+    environment: &[(OsString, OsString)],
 ) -> AppResult<ProcessOutput> {
     let executable = resolve_tool(program)?;
     run_process_at_inner(
@@ -188,6 +192,25 @@ pub(crate) fn run_process_at(
     run_process_at_inner(program, executable, args, timeout, secrets, None, &[])
 }
 
+pub(crate) fn run_process_at_with_env(
+    program: &str,
+    executable: &Path,
+    args: &[String],
+    timeout: Duration,
+    secrets: &[&str],
+    environment: &[(OsString, OsString)],
+) -> AppResult<ProcessOutput> {
+    run_process_at_inner(
+        program,
+        executable,
+        args,
+        timeout,
+        secrets,
+        None,
+        environment,
+    )
+}
+
 fn run_process_at_inner(
     program: &str,
     executable: &Path,
@@ -195,7 +218,7 @@ fn run_process_at_inner(
     timeout: Duration,
     secrets: &[&str],
     stdin_bytes: Option<&[u8]>,
-    environment: &[(String, String)],
+    environment: &[(OsString, OsString)],
 ) -> AppResult<ProcessOutput> {
     let started = Instant::now();
     let mut command = background_command(executable);
