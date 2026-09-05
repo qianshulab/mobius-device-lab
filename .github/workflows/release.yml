@@ -25,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || inputs.release_tag || github.sha }}
+  group: release-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || inputs.release_tag || 'configured-version' }}
   cancel-in-progress: false
 
 env:
@@ -179,20 +179,49 @@ jobs:
               }
             }
 
-            const releaseWasPublished = !release.draft;
-            const publishAfterBuild = publish || releaseWasPublished;
-            if (releaseWasPublished) {
-              const response = await github.rest.repos.updateRelease({
-                owner,
-                repo,
-                release_id: release.id,
-                draft: true,
-              });
-              release = response.data;
-              core.notice(
-                `Temporarily returned ${tag} to draft while its packages are rebuilt`,
-              );
+            let tagCommit = null;
+            try {
+              let tagObject = (
+                await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` })
+              ).data.object;
+              for (let depth = 0; tagObject.type === "tag" && depth < 8; depth += 1) {
+                tagObject = (
+                  await github.rest.git.getTag({ owner, repo, tag_sha: tagObject.sha })
+                ).data.object;
+              }
+              if (tagObject.type !== "commit") {
+                core.setFailed(`Release tag ${tag} does not resolve to a commit`);
+                return;
+              }
+              tagCommit = tagObject.sha;
+            } catch (error) {
+              if (error.status !== 404) throw error;
             }
+            if (tagCommit && tagCommit !== context.sha) {
+              core.setFailed(
+                `Release tag ${tag} already points to ${tagCommit}; refusing to rebuild it from ${context.sha}`,
+              );
+              return;
+            }
+
+            if (!release.draft) {
+              core.setFailed(
+                `Release ${tag} is already published; bump the application version instead of replacing a public release`,
+              );
+              return;
+            }
+            const publishAfterBuild = publish;
+            const refreshed = await github.rest.repos.updateRelease({
+              owner,
+              repo,
+              release_id: release.id,
+              tag_name: tag,
+              target_commitish: context.sha,
+              draft: true,
+              prerelease,
+            });
+            release = refreshed.data;
+            core.info(`Release ${release.id} now targets ${context.sha}`);
 
             core.setOutput("version", version);
             core.setOutput("tag", tag);
@@ -447,6 +476,7 @@ jobs:
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: ${{ runner.os == 'Linux' && '1' || '' }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}

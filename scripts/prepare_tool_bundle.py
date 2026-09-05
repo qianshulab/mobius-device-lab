@@ -288,6 +288,25 @@ def require_regular(file_path: Path, label: str) -> Path:
     return file_path
 
 
+def normalized_git_patch(source: Path, destination: Path, label: str) -> Path:
+    """Copy a Git patch with deterministic LF endings for Git for Windows."""
+    require_regular(source, label)
+    try:
+        data = source.read_bytes()
+    except OSError as error:
+        raise BundleError(f"{label}: unable to read patch: {error}") from error
+    if not data or len(data) > 1024 * 1024:
+        raise BundleError(f"{label}: patch must be between 1 byte and 1 MiB")
+    data = data.replace(b"\r\n", b"\n")
+    if b"\r" in data or b"\x00" in data:
+        raise BundleError(f"{label}: patch contains unsupported control bytes")
+    try:
+        destination.write_bytes(data)
+    except OSError as error:
+        raise BundleError(f"{label}: unable to stage patch: {error}") from error
+    return destination
+
+
 def locked_root(extracted: Path, artifact: dict[str, Any], label: str) -> Path:
     root_value = artifact.get("root")
     if not isinstance(root_value, str):
@@ -778,8 +797,9 @@ def stage_go_ios(
     artifact = checked_artifact("go-ios source", component["source"])
     extracted = extract_locked("go-ios-source", artifact, cache, work)
     source = extracted / artifact["root"]
-    patch_path = repo_root / component["patch"]
-    require_regular(patch_path, "go-ios patch")
+    patch_path = normalized_git_patch(
+        repo_root / component["patch"], work / "go-ios-mobius.patch", "go-ios patch"
+    )
     run(["git", "apply", "--check", str(patch_path)], source)
     run(["git", "apply", str(patch_path)], source)
 
