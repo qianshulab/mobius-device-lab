@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "bundleRevision": 3,
+  "bundleRevision": 4,
   "components": {
     "scrcpy": {
       "version": "4.1",
@@ -628,7 +628,12 @@
         "--enable-encoder=mjpeg",
         "--enable-muxer=mpjpeg",
         "--enable-small"
-      ]
+      ],
+      "targetConfigure": {
+        "windows-x86_64": [
+          "--extra-ldflags=-static"
+        ]
+      }
     }
   }
 }

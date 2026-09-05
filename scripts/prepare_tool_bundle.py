@@ -1033,11 +1033,15 @@ def stage_ffmpeg(
     artifact = checked_artifact("FFmpeg source", component["source"])
     extracted = extract_locked("ffmpeg-source", artifact, cache, work)
     source = extracted / artifact["root"]
-    configure = [str(source / "configure"), *component["configure"]]
+    configure_options = [
+        *component["configure"],
+        *component.get("targetConfigure", {}).get(target, []),
+    ]
     environment = build_environment(target)
     if target.endswith("x86_64") and shutil.which("nasm") is None:
         print("nasm was not found; building the locked C-only FFmpeg fallback")
-        configure.append("--disable-x86asm")
+        configure_options.append("--disable-x86asm")
+    configure = [str(source / "configure"), *configure_options]
     run(configure, source, environment)
     jobs = max(1, min(os.cpu_count() or 2, 4))
     executable = "ffmpeg.exe" if target.startswith("windows-") else "ffmpeg"
@@ -1052,7 +1056,7 @@ def stage_ffmpeg(
     stager.copy(source / "LICENSE.md", "licenses/ffmpeg-LICENSE.md", "ffmpeg")
     stager.write_text(
         "licenses/ffmpeg-configure.txt",
-        " ".join(component["configure"]) + "\n",
+        " ".join(configure_options) + "\n",
         "ffmpeg",
     )
 
