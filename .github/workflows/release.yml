@@ -126,7 +126,9 @@ jobs:
               "",
               "下载后请使用 `SHA256SUMS.txt` 校验文件。未配置平台签名凭据时，Windows/Linux 产物未签名，macOS 产物仅使用 ad-hoc 签名，不等同于 Developer ID 签名和公证。",
               "",
-              "安装包不内置 ADB、scrcpy、FFmpeg、Frida、libimobiledevice 或 OpenSSH 等第三方 CLI，设备功能仍需要用户在本机安装或显式配置已审核工具链。",
+              "各平台安装包已内置并优先使用 ADB 37.0.0、scrcpy/Server 4.1、最小 LGPL FFmpeg 9.0.1、AAPT2 9.4.0-15978811、回环加固的 go-ios 1.3.2-mobius.1 和受限 Mobius SSH/SFTP 0.2.0；无需配置 PATH。精确来源、许可证和逐文件哈希随包提供，对应源码与构建脚本见同一 Release 的 third-party-sources 归档。",
+              "",
+              "Frida Server 仍由用户按设备 ABI/版本上传。桌面 SSH/SFTP 客户端已随包；Windows iOS USB 需要 Apple Mobile Device 驱动，Linux iOS USB 需要 usbmuxd 与 udev 权限，这些系统/设备条件不能由应用资源替代。",
               "",
               "越狱 iOS SSH 的 `root/alpine` 只是隔离实验设备的便捷默认值；离开受控测试环境前应立即更换密码或改用独立密钥。",
             ].join("\n");
@@ -228,18 +230,22 @@ jobs:
           - label: Windows x64
             platform: windows-2022
             rust_target: x86_64-pc-windows-msvc
+            resource_target: windows-x86_64
             bundles: nsis
           - label: Linux x64
             platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
+            resource_target: linux-x86_64
             bundles: appimage,deb
           - label: macOS Apple Silicon
             platform: macos-latest
             rust_target: aarch64-apple-darwin
+            resource_target: macos-aarch64
             bundles: dmg
           - label: macOS Intel
-            platform: macos-latest
+            platform: macos-15-intel
             rust_target: x86_64-apple-darwin
+            resource_target: macos-x86_64
             bundles: dmg
     runs-on: ${{ matrix.platform }}
 
@@ -262,7 +268,29 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
+            nasm \
             xdg-utils
+
+      - name: Install Intel macOS assembly tools
+        if: runner.os == 'macOS' && matrix.resource_target == 'macos-x86_64'
+        shell: bash
+        run: command -v nasm >/dev/null 2>&1 || brew install nasm
+
+      - name: Set up Windows native build tools
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: inherit
+          install: >-
+            git
+            make
+            python
+            tar
+            xz
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-nasm
 
       - name: Set up pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -281,6 +309,12 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.rust_target }}
+
+      - name: Set up Go for bundled Go tools
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.5"
+          cache: false
 
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -306,6 +340,11 @@ jobs:
           CONFIGURED_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+
+          # Keep the app and every locally built bundled tool compatible with
+          # the same declared floor. Without this, the active runner SDK can
+          # silently raise FFmpeg's minimum macOS version.
+          echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> "$GITHUB_ENV"
 
           write_environment_value() {
             local variable_name="$1"
@@ -340,6 +379,70 @@ jobs:
             write_environment_value APPLE_TEAM_ID "$CONFIGURED_APPLE_TEAM_ID"
           fi
 
+      - name: Prepare bundled toolchain on Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: >-
+          python scripts/prepare_tool_bundle.py
+          --lock packaging/toolchain.lock.json
+          --target ${{ matrix.resource_target }}
+          --output src-tauri/resources/tools/${{ matrix.resource_target }}
+
+      - name: Prepare bundled toolchain on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: >-
+          python3 scripts/prepare_tool_bundle.py
+          --lock packaging/toolchain.lock.json
+          --target ${{ matrix.resource_target }}
+          --output src-tauri/resources/tools/${{ matrix.resource_target }}
+
+      - name: Verify bundled toolchain on Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: >-
+          python scripts/verify_tool_bundle.py
+          --lock packaging/toolchain.lock.json
+          --target ${{ matrix.resource_target }}
+          --root src-tauri/resources/tools
+
+      - name: Verify bundled toolchain on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: >-
+          python3 scripts/verify_tool_bundle.py
+          --lock packaging/toolchain.lock.json
+          --target ${{ matrix.resource_target }}
+          --root src-tauri/resources/tools
+
+      - name: Sign bundled macOS executables
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/resources/tools/${{ matrix.resource_target }}"
+          signing_identity="${APPLE_SIGNING_IDENTITY:--}"
+          while IFS= read -r -d '' candidate; do
+            if ! file "$candidate" | grep -q 'Mach-O'; then
+              continue
+            fi
+            if [[ "$(basename "$candidate")" == "adb" ]] && codesign --verify --strict "$candidate"; then
+              echo "Preserving upstream Google signature: $candidate"
+              continue
+            fi
+            if [[ "$signing_identity" == "-" ]]; then
+              codesign --force --sign - --timestamp=none "$candidate"
+            else
+              codesign --force --options runtime --timestamp --sign "$signing_identity" "$candidate"
+            fi
+          done < <(find "$bundle_dir" -type f -print0)
+
+          python3 scripts/refresh_tool_manifest.py --bundle "$bundle_dir"
+          python3 scripts/verify_tool_bundle.py \
+            --lock packaging/toolchain.lock.json \
+            --target "${{ matrix.resource_target }}" \
+            --root src-tauri/resources/tools
+
       - name: Build and upload native package
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -357,9 +460,139 @@ jobs:
           retryAttempts: 2
           args: --target ${{ matrix.rust_target }} --bundles ${{ matrix.bundles }}
 
+      - name: Verify toolchain inside Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installers = @(Get-ChildItem -Path "src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis" -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          $extractRoot = Join-Path $env:RUNNER_TEMP "mobius-nsis-audit"
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+          & 7z x -y "-o$extractRoot" $installers[0].FullName | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to extract the NSIS installer"
+          }
+          $manifests = @(Get-ChildItem -Path $extractRoot -Filter "manifest.json" -File -Recurse | Where-Object {
+            $_.Directory.Name -eq "${{ matrix.resource_target }}" -and
+            $_.Directory.Parent.Name -eq "tools" -and
+            $_.Directory.Parent.Parent.Name -eq "resources"
+          })
+          if ($manifests.Count -ne 1) {
+            throw "Expected one packaged tool manifest, found $($manifests.Count)"
+          }
+          $toolsRoot = $manifests[0].Directory.Parent.FullName
+          python scripts/verify_tool_bundle.py `
+            --lock packaging/toolchain.lock.json `
+            --target "${{ matrix.resource_target }}" `
+            --root $toolsRoot
+
+      - name: Verify toolchain inside Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          target_root="src-tauri/target/${{ matrix.rust_target }}/release/bundle"
+          debs=("$target_root"/deb/*.deb)
+          appimages=("$target_root"/appimage/*.AppImage)
+          if [[ "${#debs[@]}" -ne 1 || "${#appimages[@]}" -ne 1 ]]; then
+            echo "Expected one DEB and one AppImage." >&2
+            exit 1
+          fi
+
+          audit_root="$(mktemp -d)"
+          trap 'rm -rf "$audit_root"' EXIT
+          dpkg-deb -x "${debs[0]}" "$audit_root/deb"
+          mkdir -p "$audit_root/appimage"
+          appimage="$(realpath "${appimages[0]}")"
+          chmod +x "$appimage"
+          (cd "$audit_root/appimage" && "$appimage" --appimage-extract >/dev/null)
+
+          for extracted in "$audit_root/deb" "$audit_root/appimage/squashfs-root"; do
+            mapfile -t manifests < <(
+              find "$extracted" -type f \
+                -path "*/resources/tools/${{ matrix.resource_target }}/manifest.json" -print
+            )
+            if [[ "${#manifests[@]}" -ne 1 ]]; then
+              echo "Expected one packaged tool manifest in $extracted." >&2
+              exit 1
+            fi
+            tools_root="$(dirname "$(dirname "${manifests[0]}")")"
+            python3 scripts/verify_tool_bundle.py \
+              --lock packaging/toolchain.lock.json \
+              --target "${{ matrix.resource_target }}" \
+              --root "$tools_root"
+          done
+
+      - name: Verify toolchain inside macOS disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg/*.dmg)
+          if [[ "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one DMG, found ${#dmgs[@]}." >&2
+            exit 1
+          fi
+          mount_point="$(mktemp -d)"
+          cleanup() {
+            hdiutil detach "$mount_point" -quiet || true
+            rmdir "$mount_point" || true
+          }
+          trap cleanup EXIT
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "${dmgs[0]}" -quiet
+          manifest_count="$(find "$mount_point" -type f \
+            -path "*/resources/tools/${{ matrix.resource_target }}/manifest.json" \
+            -print | wc -l | tr -d ' ')"
+          manifest="$(find "$mount_point" -type f \
+            -path "*/resources/tools/${{ matrix.resource_target }}/manifest.json" \
+            -print -quit)"
+          if [[ "$manifest_count" -ne 1 || -z "$manifest" ]]; then
+            echo "Expected one packaged tool manifest in the DMG." >&2
+            exit 1
+          fi
+          tools_root="$(dirname "$(dirname "$manifest")")"
+          python3 scripts/verify_tool_bundle.py \
+            --lock packaging/toolchain.lock.json \
+            --target "${{ matrix.resource_target }}" \
+            --root "$tools_root"
+
+  sources:
+    name: Build third-party source package
+    needs: prepare
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Create source and build-script archive
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: >-
+          python3 scripts/create_third_party_sources.py
+          --lock packaging/toolchain.lock.json
+          --output "Mobius-Device-Lab_${RELEASE_VERSION}_third-party-sources.tar.xz"
+
+      - name: Upload source package to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: >-
+          gh release upload "$RELEASE_TAG"
+          "Mobius-Device-Lab_${RELEASE_VERSION}_third-party-sources.tar.xz"
+          --clobber
+
   finalize:
     name: Checksums and finalize release
-    needs: [prepare, build]
+    needs: [prepare, build, sources]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -380,6 +613,7 @@ jobs:
             "Mobius-Device-Lab_${RELEASE_VERSION}_linux_amd64.AppImage"
             "Mobius-Device-Lab_${RELEASE_VERSION}_linux_amd64.deb"
             "Mobius-Device-Lab_${RELEASE_VERSION}_windows_x64-setup.exe"
+            "Mobius-Device-Lab_${RELEASE_VERSION}_third-party-sources.tar.xz"
           )
 
           declare -A expected_lookup=()

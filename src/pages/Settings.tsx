@@ -28,7 +28,7 @@ function configurationInputFor(toolId: string) {
   if (toolId === "adb") return "tool-path-adb";
   if (toolId === "scrcpy") return "tool-path-scrcpy";
   if (toolId === "frida") return "tool-path-frida";
-  if (["idevice_id", "ideviceinfo", "ideviceinstaller", "idevicescreenshot", "iproxy", "ssh", "scp"].includes(toolId)) return "tool-path-ios";
+  if (["ios", "ssh", "scp"].includes(toolId)) return "tool-path-ios";
   return "tool-path-managed";
 }
 
@@ -60,15 +60,14 @@ export default function SettingsPage({ settings, tools, group, onGroupChange, on
               <div className="tool-path-grid">
                 <Field label="ADB 可执行文件"><div className="path-input"><input id="tool-path-adb" value={draft.adbPath} onChange={(event) => set("adbPath", event.target.value)} placeholder="自动查找" /><button type="button" onClick={async () => { const selected = await chooseLocalFile("选择 adb 可执行文件"); if (selected) set("adbPath", selected); }}>选择</button></div></Field>
                 <Field label="scrcpy 可执行文件"><div className="path-input"><input id="tool-path-scrcpy" value={draft.scrcpyPath} onChange={(event) => set("scrcpyPath", event.target.value)} placeholder="自动查找" /><button type="button" onClick={async () => { const selected = await chooseLocalFile("选择 scrcpy 可执行文件"); if (selected) set("scrcpyPath", selected); }}>选择</button></div></Field>
-                <Field label="Frida CLI 可执行文件"><div className="path-input"><input id="tool-path-frida" value={draft.fridaPath} onChange={(event) => set("fridaPath", event.target.value)} placeholder="自动查找" /><button type="button" onClick={async () => { const selected = await chooseLocalFile("选择 frida 可执行文件"); if (selected) set("fridaPath", selected); }}>选择</button></div></Field>
-                <Field label="iOS 工具目录"><div className="path-input"><input id="tool-path-ios" value={draft.iosToolsPath} onChange={(event) => set("iosToolsPath", event.target.value)} placeholder="idevice_* / iproxy / ssh / scp" /><button type="button" onClick={async () => { const selected = await chooseDirectory("选择 iOS 工具目录"); if (selected) set("iosToolsPath", selected); }}>选择</button></div></Field>
+                <Field label="iOS / SSH 备用工具目录"><div className="path-input"><input id="tool-path-ios" value={draft.iosToolsPath} onChange={(event) => set("iosToolsPath", event.target.value)} placeholder="通常无需配置" /><button type="button" onClick={async () => { const selected = await chooseDirectory("选择 iOS / SSH 备用工具目录"); if (selected) set("iosToolsPath", selected); }}>选择</button></div></Field>
                 <Field label="Mobius 受控工具目录" hint="适合组织统一分发经审核的多工具目录。"><div className="path-input"><input id="tool-path-managed" value={draft.managedToolsPath} onChange={(event) => set("managedToolsPath", event.target.value)} placeholder="可选" /><button type="button" onClick={async () => { const selected = await chooseDirectory("选择 Mobius 受控工具目录"); if (selected) set("managedToolsPath", selected); }}>选择</button></div></Field>
               </div>
-              <div className="tool-path-footer"><span>保存时会验证绝对路径和可执行权限，不会运行所选文件。</span><Button variant="ghost" onClick={() => setDraft((current) => ({ ...current, adbPath: "", scrcpyPath: "", fridaPath: "", iosToolsPath: "", managedToolsPath: "" }))}>全部改为自动查找</Button></div>
+              <div className="tool-path-footer"><span>内置版本默认直接可用；这里只用于开发者明确覆盖。保存时会验证绝对路径和可执行权限。</span><Button variant="ghost" onClick={() => setDraft((current) => ({ ...current, adbPath: "", scrcpyPath: "", fridaPath: "", iosToolsPath: "", managedToolsPath: "" }))}>恢复内置优先</Button></div>
             </Panel>
             <Panel title="工具查找策略">
-              <div className="security-principles"><div><TerminalSquare /><span><strong>1 · 用户明确指定</strong><small>单个工具或组织维护的受控目录，优先级最高。</small></span></div><div><AppWindow /><span><strong>2 · 随安装包工具</strong><small>仅使用通过许可证、哈希和签名审查后放入 resources/tools 的版本。</small></span></div><div><KeyRound /><span><strong>3 · SDK 与系统</strong><small>再查找 Android SDK 常见目录，最后使用 PATH。</small></span></div><div><Laptop /><span><strong>Frida Server 例外</strong><small>设备端 Server 始终由用户为具体版本和 ABI 选择，不随包提供。</small></span></div></div>
-              <p className="settings-note">当前源码包只带受控目录与解析器，不附带第三方二进制。发布版只有在完成许可证、NOTICE、SHA-256 清单和各平台签名审查后才应内置工具。</p>
+              <div className="security-principles"><div><AppWindow /><span><strong>1 · 安装后即用</strong><small>发行包内置 ADB、scrcpy/Server、FFmpeg、AAPT2 和 go-ios。</small></span></div><div><TerminalSquare /><span><strong>2 · 可控覆盖</strong><small>明确选择的单个工具或组织目录可覆盖默认版本；失效时安全回到随包版本。</small></span></div><div><KeyRound /><span><strong>3 · 系统集成</strong><small>最后才查找 Android SDK 与系统工具；来源和实际路径始终可见。</small></span></div><div><Laptop /><span><strong>Frida Server 例外</strong><small>设备端 Server 仍由用户按具体版本和 ABI 上传，不随包提供。</small></span></div></div>
+              <p className="settings-note">每个平台的内置资源都由锁定来源、大小与 SHA-256 的构建流程生成，并附逐文件清单和第三方许可证。越狱 SSH/SFTP 客户端已随包；iOS USB 仍需操作系统的 Apple 驱动或 usbmuxd/udev。</p>
             </Panel>
           </>}
 

@@ -89,7 +89,7 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
   const androidReady = activeDevice?.platform === "android" && activeDevice.state === "online";
   const scrcpyReady = tools.some((tool) => tool.id === "scrcpy" && tool.state === "ready");
   const ffmpegReady = tools.some((tool) => tool.id === "ffmpeg" && tool.state === "ready");
-  const iosScreenToolReady = tools.some((tool) => tool.id === "idevicescreenshot" && tool.state === "ready");
+  const iosScreenToolReady = tools.some((tool) => ["ios", "idevicescreenshot"].includes(tool.id) && tool.state === "ready");
   const iosNativeCandidate = activeDevice?.platform === "ios"
     && activeDevice.state === "online"
     && activeDevice.connectionSource !== "manual"
@@ -102,7 +102,7 @@ export default function Devices({ devices, activeDevice, loading, onRefresh, onS
     : activeDevice.connectionSource === "manual" || activeDevice.id.startsWith("ios-ssh:")
       ? "当前是仅 SSH 端点；iOS 截图服务不经 SSH 提供。请改用 USB/usbmux 或已配对的网络连接。"
       : !iosScreenToolReady
-        ? "电脑未检测到 idevicescreenshot；在设置中选择 libimobiledevice 工具目录即可。"
+        ? "iOS 截图工具未就绪；请重新检测随包 go-ios，或配置 libimobiledevice 工具目录。"
         : iosCapabilityBusy
           ? "正在检测已配对的 iOS 屏幕服务…"
           : iosScreenCapability?.available

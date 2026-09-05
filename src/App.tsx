@@ -482,7 +482,7 @@ export default function App() {
       { id: "frida-action", label: "打开 Android Frida 管理", detail: activeDevice.name, icon: KeyRound, run: () => quickAction("frida") },
     ] : activeDevice?.platform === "ios" ? [
       { id: "ios-files-action", label: activeIosSshSession ? "打开 iOS 文件" : "连接 iOS SSH", detail: activeDevice.name, icon: FolderSync, run: () => navigate("files") },
-      { id: "ios-network-action", label: "打开 iOS 端口隧道", detail: "iproxy / SSH 转发", icon: Network, run: () => navigate("network") },
+      { id: "ios-network-action", label: "打开 iOS 端口隧道", detail: "USB / SSH 转发", icon: Network, run: () => navigate("network") },
       { id: "ios-tools-action", label: "打开 iOS 系统工具", detail: "设备、进程、网络与日志", icon: Wrench, run: () => openDebug("system") },
       { id: "ios-screenshot-action", label: "截图到剪贴板", detail: activeDevice.name, icon: Camera, run: captureToClipboard },
       { id: "ios-frida-action", label: "打开 iOS Frida 管理", detail: activeDevice.name, icon: KeyRound, run: () => quickAction("frida") },
@@ -505,10 +505,12 @@ export default function App() {
 
   const readyToolCount = tools.filter((tool) => tool.state === "ready").length;
   const toolIssues = tools.filter((tool) => tool.state !== "ready");
-  const activeCoreTools = activeDevice?.platform === "ios"
-    ? activeDevice.connectionSource === "manual" ? new Set(["ssh", "scp"]) : new Set(["idevice_id", "ideviceinfo"])
-    : new Set(["adb"]);
-  const activeCoreFailure = toolIssues.some((tool) => activeCoreTools.has(tool.id) && tool.state === "missing");
+  const toolReady = (id: string) => tools.some((tool) => tool.id === id && tool.state === "ready");
+  const activeCoreFailure = activeDevice?.platform === "ios"
+    ? activeDevice.connectionSource === "manual"
+      ? !toolReady("ssh") || !toolReady("scp")
+      : !toolReady("ios")
+    : !toolReady("adb");
   const toolHealthStatus = loading && !tools.length ? "running" : toolHealthFailed || !tools.length || activeCoreFailure ? "error" : toolIssues.length ? "warning" : "success";
   const toolHealthLabel = toolHealthFailed
     ? "工具链检测失败 · 显示上次结果"

@@ -246,9 +246,9 @@ function AndroidNetworkWorkspace({ activeDevice, initialTab = "proxy", defaultPr
   </div>;
 }
 
-function IosNetworkWorkspace({ device, iosSession, tools = [], onOpenIosFiles, onOpenToolSettings, notify, record }: NetworkProps & { device: Device }) {
+function IosNetworkWorkspace({ device, iosSession, tools = [], onOpenIosFiles, notify, record }: NetworkProps & { device: Device }) {
   const usbDevice = device.transport === "usb" || device.transport === "usbmux";
-  const iproxyReady = tools.some((tool) => tool.id === "iproxy" && tool.state === "ready");
+  const usbTunnelReady = tools.some((tool) => tool.id === "ios" && tool.state === "ready");
   const sshReady = !!iosSession?.connected && !!iosSession.jailbreakConfirmed;
   const [transport, setTransport] = useState<IosPortTunnelTransport>(usbDevice ? "iproxy" : "ssh");
   const [direction, setDirection] = useState<IosPortTunnelDirection>("hostToDevice");
@@ -304,8 +304,8 @@ function IosNetworkWorkspace({ device, iosSession, tools = [], onOpenIosFiles, o
       notify("warning", "端口无效", "本机端口和 iPhone 端口都需在 1–65535 之间。");
       return;
     }
-    if (transport === "iproxy" && (!usbDevice || !iproxyReady)) {
-      notify("warning", "USB 隧道不可用", !usbDevice ? "当前设备不是 USB/usbmux 连接。" : "请先在设置中配置 iproxy。");
+    if (transport === "iproxy" && (!usbDevice || !usbTunnelReady)) {
+      notify("warning", "USB 隧道不可用", !usbDevice ? "当前设备不是 USB/usbmux 连接。" : "随包 iOS USB 工具未就绪，请在设置中重新检测。");
       return;
     }
     if (transport === "ssh" && (!sshReady || !iosSession)) {
@@ -355,15 +355,15 @@ function IosNetworkWorkspace({ device, iosSession, tools = [], onOpenIosFiles, o
     }
   };
 
-  const transportReady = transport === "iproxy" ? usbDevice && iproxyReady : sshReady;
+  const transportReady = transport === "iproxy" ? usbDevice && usbTunnelReady : sshReady;
   const preview = direction === "hostToDevice"
     ? `本机 127.0.0.1:${hostPort || "…"}  →  iPhone 127.0.0.1:${devicePort || "…"}`
     : `iPhone 127.0.0.1:${devicePort || "…"}  →  本机 127.0.0.1:${hostPort || "…"}`;
 
   return <div className="page network-page ios-network-page">
-    <div className="page-heading"><div><span className="eyebrow">IOS PORT TUNNELS</span><h1>iOS 网络</h1><p>封装 iproxy 与 SSH 隧道；所有监听默认只绑定本机回环地址。</p></div><Button icon={<RefreshCw className={busy === "refresh" ? "spin" : ""} size={14} />} disabled={!!busy} onClick={() => void refreshTunnels()}>刷新隧道</Button></div>
+    <div className="page-heading"><div><span className="eyebrow">IOS PORT TUNNELS</span><h1>iOS 网络</h1><p>封装 USB 与 SSH 隧道；所有监听默认只绑定本机回环地址。</p></div><Button icon={<RefreshCw className={busy === "refresh" ? "spin" : ""} size={14} />} disabled={!!busy} onClick={() => void refreshTunnels()}>刷新隧道</Button></div>
     <div className="ios-network-session-strip">
-      <span><StatusDot status={usbDevice && iproxyReady ? "success" : "muted"} /><strong>USB / iproxy</strong><small>{usbDevice ? iproxyReady ? "可直接创建本机到 iPhone 的映射" : "工具未就绪" : "当前不是 USB 连接"}</small></span>
+      <span><StatusDot status={usbDevice && usbTunnelReady ? "success" : "muted"} /><strong>USB 隧道</strong><small>{usbDevice ? usbTunnelReady ? "随包工具可直接创建本机到 iPhone 的映射" : "工具未就绪" : "当前不是 USB 连接"}</small></span>
       <span><StatusDot status={sshReady ? "success" : "warning"} /><strong>SSH 隧道</strong><small>{sshReady && iosSession ? `${iosSession.mode === "usb" ? "USB SSH" : "局域网 SSH"} · ${iosSession.username}@${iosSession.sshHost}:${iosSession.sshPort}` : "连接后支持双向转发"}</small></span>
       {!sshReady && <Button variant="ghost" icon={<KeyRound size={14} />} onClick={onOpenIosFiles}>连接 SSH</Button>}
     </div>
@@ -371,14 +371,14 @@ function IosNetworkWorkspace({ device, iosSession, tools = [], onOpenIosFiles, o
       <Panel className="span-4" title={<><Plus size={17} /> 新建 iOS 隧道</>}>
         <div className="form-stack ios-tunnel-form">
           <div className="ios-tunnel-transport">
-            <button className={transport === "iproxy" ? "active" : ""} disabled={!usbDevice} onClick={() => chooseTransport("iproxy")}><Usb size={18} /><span><strong>USB / iproxy</strong><small>无需 SSH · 本机访问设备</small></span></button>
+            <button className={transport === "iproxy" ? "active" : ""} disabled={!usbDevice} onClick={() => chooseTransport("iproxy")}><Usb size={18} /><span><strong>USB 直连隧道</strong><small>无需 SSH · 本机访问设备</small></span></button>
             <button className={transport === "ssh" ? "active" : ""} onClick={() => chooseTransport("ssh")}><KeyRound size={18} /><span><strong>SSH 隧道</strong><small>支持两个方向</small></span></button>
           </div>
           <div className="direction-picker"><button className={direction === "hostToDevice" ? "active" : ""} onClick={() => chooseDirection("hostToDevice")}><ArrowDownToLine /><strong>本机访问 iPhone</strong><small>PC → 设备服务</small></button><button className={direction === "deviceToHost" ? "active" : ""} onClick={() => chooseDirection("deviceToHost")}><ArrowUpFromLine /><strong>iPhone 访问本机</strong><small>设备 → PC 服务</small></button></div>
           <div className="mapping-fields"><Field label="本机端口"><div className="prefix-input"><span>tcp:</span><input value={hostPort} onChange={(event) => setHostPort(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" /></div></Field><ArrowRight size={16} /><Field label="iPhone 端口"><div className="prefix-input"><span>tcp:</span><input value={devicePort} onChange={(event) => setDevicePort(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" /></div></Field></div>
           <div className="preset-row"><span>预设</span><button onClick={() => applyPreset(2222, 22, "iproxy")}>SSH</button><button onClick={() => applyPreset(27042, 27042)}>Frida</button><button onClick={() => applyPreset(8080, 8080)}>HTTP 8080</button><button onClick={() => applyPreset(1234, 1234)}>调试端口</button></div>
-          <div className="ios-tunnel-preview"><StatusDot status={transportReady ? "success" : "warning"} /><code>{preview}</code><small>{transport === "iproxy" ? "iproxy 仅支持本机访问 iPhone" : direction === "hostToDevice" ? "SSH -L · 本地转发" : "SSH -R · 远程转发"}</small></div>
-          {!iproxyReady && transport === "iproxy" && <InlineNotice tone="warning" title="需要 iproxy">安装 libusbmuxd 工具或在设置中指定 iOS 工具目录。 <button className="text-button" onClick={onOpenToolSettings}>打开工具链设置</button></InlineNotice>}
+          <div className="ios-tunnel-preview"><StatusDot status={transportReady ? "success" : "warning"} /><code>{preview}</code><small>{transport === "iproxy" ? "USB 直连仅支持本机访问 iPhone" : direction === "hostToDevice" ? "SSH -L · 本地转发" : "SSH -R · 远程转发"}</small></div>
+          {!usbTunnelReady && transport === "iproxy" && <InlineNotice tone="warning" title="USB 工具未就绪">重新安装或在设置中重新检测随包 go-ios 工具。</InlineNotice>}
           {!sshReady && transport === "ssh" && <InlineNotice tone="warning" title="需要已验证的 SSH 会话">连接一次后即可复用当前账号和认证，不需要再次输入命令。 <button className="text-button" onClick={onOpenIosFiles}>连接 SSH</button></InlineNotice>}
           <Button variant="primary" icon={busy === "create" ? <LoaderCircle className="spin" size={14} /> : transport === "iproxy" ? <Usb size={14} /> : <KeyRound size={14} />} disabled={!transportReady || !!busy} onClick={() => void createTunnel()}>创建隧道</Button>
         </div>
@@ -386,9 +386,9 @@ function IosNetworkWorkspace({ device, iosSession, tools = [], onOpenIosFiles, o
       <Panel className="span-8" title="Mobius 管理的活跃隧道" action={<StatusBadge tone={tunnels.length ? "success" : "neutral"}>{tunnels.length} 条</StatusBadge>}>
         {tunnels.length ? <div className="mapping-list ios-tunnel-list"><div className="mapping-head"><span>通道</span><span>监听端</span><span>目标端</span><span>状态</span><span /></div>{tunnels.map((tunnel) => {
           const toDevice = tunnel.direction === "hostToDevice";
-          return <div className="mapping-row" key={tunnel.tunnelId}><span><StatusBadge tone={tunnel.transport === "iproxy" ? "info" : "purple"}>{tunnel.transport === "iproxy" ? "IPROXY" : toDevice ? "SSH -L" : "SSH -R"}</StatusBadge></span><code>{toDevice ? `${tunnel.bindAddress}:${tunnel.hostPort}` : `iPhone:${tunnel.devicePort}`}</code><code>{toDevice ? `iPhone:${tunnel.devicePort}` : `${tunnel.bindAddress}:${tunnel.hostPort}`}</code><span className="inline-icon"><StatusDot status={tunnel.active ? "success" : "warning"} />{tunnel.active ? "活跃" : "已退出"}</span><button className="icon-button danger-icon" disabled={!!busy} onClick={() => void removeTunnel(tunnel)} title="停止并移除"><Trash2 size={15} /></button></div>;
+          return <div className="mapping-row" key={tunnel.tunnelId}><span><StatusBadge tone={tunnel.transport === "iproxy" ? "info" : "purple"}>{tunnel.transport === "iproxy" ? "USB" : toDevice ? "SSH -L" : "SSH -R"}</StatusBadge></span><code>{toDevice ? `${tunnel.bindAddress}:${tunnel.hostPort}` : `iPhone:${tunnel.devicePort}`}</code><code>{toDevice ? `iPhone:${tunnel.devicePort}` : `${tunnel.bindAddress}:${tunnel.hostPort}`}</code><span className="inline-icon"><StatusDot status={tunnel.active ? "success" : "warning"} />{tunnel.active ? "活跃" : "已退出"}</span><button className="icon-button danger-icon" disabled={!!busy} onClick={() => void removeTunnel(tunnel)} title="停止并移除"><Trash2 size={15} /></button></div>;
         })}</div> : <div className="quiet-state large"><Unplug size={25} /><strong>没有由 Mobius 创建的隧道</strong><span>创建后可在这里查看方向、端口、进程和状态；退出应用时会自动清理。</span></div>}
-        <div className="ios-tunnel-safety"><AlertTriangle size={14} /><span>仅管理本工具创建的进程；不会关闭其他 iproxy 或 SSH 会话，也不会自动修改 iOS 系统代理。</span></div>
+        <div className="ios-tunnel-safety"><AlertTriangle size={14} /><span>仅管理本工具创建的 USB 或 SSH 隧道进程；不会关闭其他会话，也不会自动修改 iOS 系统代理。</span></div>
       </Panel>
     </div>
   </div>;

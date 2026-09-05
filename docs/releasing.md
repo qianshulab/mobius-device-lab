@@ -11,22 +11,22 @@ Mobius 使用同一套 React、TypeScript 和 Rust 源码，但在原生 GitHub 
 | macOS | arm64 DMG | Apple Silicon |
 | macOS | x86_64 DMG | 在 macOS runner 上安装对应 Rust target 后构建 |
 
-这叫“一套源码、多平台产物”，不是一个文件跨系统运行。macOS `.app` 本身是 Bundle 目录，Windows 安装器依赖 WebView2，Linux 包也需要与发行版运行时和设备权限配合。
+这叫“一套源码、多平台产物”，不是一个文件跨系统运行。每个安装包都会携带对应架构的 ADB、scrcpy/Server、最小 FFmpeg、AAPT2、go-ios 与 Mobius SSH/SFTP 资源；macOS `.app` 本身仍是 Bundle 目录，Windows 安装器依赖 WebView2，Linux 包也需要与发行版运行时和设备权限配合。
 
 ## 工作流
 
 - `.github/workflows/ci.yml`：推送和 Pull Request 时，在 Windows、Linux、macOS 上执行前端构建、Rust 格式检查、`cargo check`、`cargo clippy -D warnings` 和 `cargo test`。
-- `.github/workflows/release.yml`：推送与应用版本匹配的 `v*` 标签，或者在 Actions 中手动触发。它先校验三处版本、创建草稿 Release，再由四个原生 runner 上传安装包。所有平台成功后才会生成 `SHA256SUMS.txt` 并按触发方式决定是否公开发布。每个原生包也会保留为 Actions Artifact。
+- `.github/workflows/release.yml`：推送与应用版本匹配的 `v*` 标签，或者在 Actions 中手动触发。它先校验三处版本、创建草稿 Release，再由四个原生 runner 生成并验证目标工具集、构建安装包，同时生成第三方源码/构建脚本归档。所有平台成功后才会生成 `SHA256SUMS.txt` 并按触发方式决定是否公开发布。每个原生包也会保留为 Actions Artifact。
 
-工作流只接受 `v<version>` 形式的精确标签，例如应用版本为 `0.1.0` 时标签必须是 `v0.1.0`。它会在任何编译开始前确认 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 三处版本完全一致，并拒绝非 SemVer 版本或不匹配标签。
+工作流只接受 `v<version>` 形式的精确标签，例如应用版本为 `0.2.0` 时标签必须是 `v0.2.0`。它会在任何编译开始前确认 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 三处版本完全一致，并拒绝非 SemVer 版本或不匹配标签。
 
 ### 触发发布
 
 通过标签触发会在四个平台构建全部成功后自动公开 Release：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 手动触发时，`release_tag` 可以留空，工作流会根据 Tauri 版本生成 `v<version>`。`publish` 默认关闭，因此适合先产出草稿、下载验收后再在 GitHub 页面公开；只有明确开启 `publish` 才会在构建成功后公开。对同一标签重新运行会复用已有 Release，不会并发创建重复发布。
@@ -37,7 +37,28 @@ git push origin v0.1.0
 - Linux x64：AppImage 和 Debian `deb`
 - macOS Apple Silicon：arm64 DMG
 - macOS Intel：x86_64 DMG
-- `SHA256SUMS.txt`：本次所有 Actions Artifact 中原生包的 SHA-256
+- `Mobius-Device-Lab_<version>_third-party-sources.tar.xz`：固定 scrcpy 及便携依赖、FFmpeg、go-ios/Go、Mobius SSH 模块上游源码、第一方 helper 源码/测试、Mobius 补丁、工具锁与完整构建/验证脚本
+- `SHA256SUMS.txt`：本次所有原生包与第三方源码归档的 SHA-256
+
+## 随包工具生成与合规
+
+[`packaging/toolchain.lock.json`](../packaging/toolchain.lock.json) 是工具供应链的唯一版本入口。目前固定：
+
+| 组件 | 版本与来源 | 打包方式 |
+| --- | --- | --- |
+| ADB | 37.0.0，scrcpy 4.1 官方便携发行包 | 与 Google Platform Tools 37.0.0 目标归档逐字节比对，带对应 `NOTICE`；Windows 保留匹配 DLL |
+| scrcpy / Server | 4.1，Genymobile 官方便携发行包 | 客户端与 `scrcpy-server` 必须来自同一归档 |
+| scrcpy 便携依赖 | FFmpeg 8.1.2、SDL 3.4.12、libusb 1.0.30、dav1d 1.5.3、目标对应 zlib；Windows 另含 MinGW-w64 11.0.1 runtime | 保留完整源码、原始许可/第三方声明、链接方式和 LGPL 重链指南 |
+| FFmpeg | 9.0.1，FFmpeg 官方源码 | 原生 runner 最小 LGPL 构建；禁用 GPL、nonfree、网络与外部编解码器 |
+| AAPT2 | 9.4.0-15978811，Google Maven | 提取原生二进制与完整 `NOTICE` |
+| go-ios | 1.3.2-mobius.1，go-ios 1.3.2 固定源码 | 用 Go 1.26.5、CGO 关闭的原生构建；应用公开补丁以标识版本并将转发/可选截图监听绑定 `127.0.0.1` |
+| Mobius SSH/SFTP | 0.2.0，仓库内第一方源码 | 用 Go 1.26.5、CGO 关闭构建；锁定 x/crypto/ssh、pkg/sftp 及实际链接模块，四平台随包作为 `ssh`/`scp` |
+
+每个平台的准备任务先验证 HTTPS 归档的精确字节数与 SHA-256，再执行有条目类型、单文件和总展开容量限制的安全解包。scrcpy 源码归档只按锁定路径提取普通许可文件，不跟随源码归档中的符号链接；FFmpeg/go-ios/Mobius SSH 仅从锁定源码与模块构建。随后为目标目录生成逐文件 `manifest.json`，记录组件、许可证、大小、SHA-256 和可执行位；验证步骤检查文件集合、目标架构、版本命令以及 scrcpy Server 完整性。macOS 构建下限固定为 12.0（保留调用者显式设置的更低值），嵌套 Mach-O 签名会在 Tauri 打包前完成，签名改变文件后刷新并再次验证清单。
+
+许可证、目标对应 ADB/AAPT2 NOTICE、scrcpy 便携依赖及内嵌第三方声明、FFmpeg 配置、Go 许可和 go-ios/Mobius SSH 模块清单与依赖许可随平台工具目录进入安装包。独立 source archive 保存这些组件的精确完整源码、链接元数据、许可、重建脚本与逐文件校验和，并与安装器共同进入 `SHA256SUMS.txt`。这套机制不等同于完整 SBOM、恶意软件扫描或平台发布签名；这些仍是正式发布门禁。
+
+Frida Server 不属于随包工具。它始终由用户按测试设备 ABI 与所需版本上传，项目也没有主机 Frida CLI 运行依赖。SSH/SFTP 客户端已随包；Windows Apple Mobile Device 驱动/服务、Linux usbmuxd/udev、设备信任、Developer Disk Image、越狱 SSH Server/AppSync 和设备端安装器仍是系统或测试机条件。
 
 若组织策略将 `GITHUB_TOKEN` 限制为只读，需在仓库的 Actions 设置中允许工作流申请 `contents: write`；工作流只在准备、上传和最终发布任务中申请该权限。
 
@@ -87,19 +108,19 @@ git push origin v0.1.0
 
 1. 更新版本、变更日志和第三方许可证清单。
 2. 锁定 pnpm 与 Cargo 依赖，并审核依赖变更。
-3. 若发行包要加入 `resources/tools` 中的第三方二进制（包括 `scrcpy-server` 或 `ffmpeg`），逐项固定版本、上游下载来源、目标架构和 SHA-256，并完成许可证、NOTICE/SBOM、依赖扫描与再分发审查；当前源码默认不附带任何这类二进制。不要仅因为内嵌屏幕依赖它们就放宽此边界。
+3. 审核 `packaging/toolchain.lock.json`、go-ios 补丁、第三方声明与构建脚本的全部变更；逐项复核版本、上游 HTTPS 来源、目标架构、大小、SHA-256、许可证、NOTICE、源码提供义务和运行时依赖。不要手工把未锁定文件放入 `resources/tools`。
 4. 面向高保证发布时，把 GitHub Actions 的浮动主版本标签固定到已审计的完整提交 SHA。
 5. 在 CI 三个平台上通过前端构建、Rust 格式、check、clippy 和 test。
-6. 对实际安装包执行恶意软件扫描、SBOM 生成和签名验签。
+6. 确认四个 runner 的工具准备/逐文件清单/架构/版本冒烟测试全部通过，第三方源码归档存在且在总校验和中；再对实际安装包执行恶意软件扫描、SBOM 生成和签名验签。
 7. 在干净 Windows、Linux、Intel Mac 和 Apple Silicon Mac 上安装、首次启动、升级和卸载。
-8. 使用 Android USB/Wi-Fi/模拟器验证冷启动固定进入工作台，连接后默认是内嵌 scrcpy Server 连续视频，而非默认单帧轮询或自动打开独立窗口。确认手机外框始终为紧凑纵向比例，横屏内容在框内完整适配且页面不跳变；首屏无需滚动即可看到屏幕操作、连接入口和底部工具链健康摘要。再用真实启流验证 Server 文件与客户端版本匹配；缺失依赖/链路中断时应降级为低频单帧。验证暂停、重连、切换设备、离开页面和退出都会清理受管 Server/FFmpeg、回环 reverse 与临时 jar。录屏须超过 20 秒仍继续，点击停止后 MP4 可播放，切设备、离页或退出会自动停止、完成封装、保存并清理设备临时文件。再覆盖独立 scrcpy 交互窗口、截图剪贴板/保存、APK 安装/导出、应用启动/停止/清数据/卸载的目标锁定与系统应用保护，以及 Frida 自定义端口 forward。
-9. 使用获准的越狱 iOS 真机验证 USB 与已配对网络设备去重枚举，并确认工具链单独显示 `idevicepair` 和 `idevicesyslog` 状态。逐个点击 `ideviceinfo`设备信息、`idevicepair validate`配对验证、`ideviceinstaller list --all`应用列表和限时 `idevicesyslog`日志采样，确认 USB/网络通道锁定精确 UDID、网络设备正确使用 `-n`、采样到期不留驻子进程。验证 `idevicescreenshot` 在匹配 Developer Disk Image 下的默认采样预览、暂停/恢复、剪贴板/电脑截图，以及仅 SSH 端点的诚实降级提示。同时验证 IPA 解析，USB `ideviceinstaller` 与 SSH 设备安装器的自动选路，用户/系统 App 清单、`.app` 分析归档及临时文件清理，USB `iproxy` 与私网 LAN SSH、密码/私钥认证、允许目录文件边界、Frida 回环隧道，以及概览/进程/固定路径工具/syslog 四类 SSH 诊断。另验证 Respring/重启的实际 SSH 目标展示、30 秒单次票据、过期/重放拒绝；设备动作只在可恢复的专用测试机上单独执行。
-10. 在 iOS `网络` 页分别验证 USB `iproxy` 的本机→设备、SSH `-L` 的本机→设备与 SSH `-R` 的设备→本机。确认 `iproxy` 的主机监听仅在 `127.0.0.1`、SSH 转发规格的两端均为 `127.0.0.1`、`iproxy` 反向请求被拒绝，且不可用本机端口不会被覆盖。停止单条隧道时不影响外部 `iproxy` / `ssh`；关闭 SSH 会话时清理该会话的 `-L` / `-R`，独立 USB `iproxy` 保持到手动停止或应用退出，应用退出后不应留下任何 Mobius 受管 iOS 隧道。
+8. 使用 Android USB/Wi-Fi/模拟器验证工具链默认解析到随包 ADB 37.0.0、scrcpy/Server 4.1 与 FFmpeg 9.0.1，冷启动固定进入工作台，连接后默认是内嵌 scrcpy Server 连续视频，而非默认单帧轮询或自动打开独立窗口。确认手机外框始终为紧凑纵向比例，横屏内容在框内完整适配且页面不跳变；首屏无需滚动即可看到屏幕操作、连接入口和底部工具链健康摘要。再用真实启流验证 Server 文件与客户端版本匹配；故意破坏依赖/链路时应降级为低频单帧。验证暂停、重连、切换设备、离开页面和退出都会清理受管 Server/FFmpeg、回环 reverse 与临时 jar。录屏须超过 20 秒仍继续，点击停止后 MP4 可播放，切设备、离页或退出会自动停止、完成封装、保存并清理设备临时文件。再覆盖独立 scrcpy 交互窗口、截图剪贴板/保存、随包 AAPT2 的 APK 分析、APK 安装/导出、应用启动/停止/清数据/卸载的目标锁定与系统应用保护，以及用户上传 Frida Server 的自定义端口 forward。
+9. 使用获准的越狱 iOS 真机验证随包 go-ios 1.3.2-mobius.1 的 USB 与已配对网络设备去重枚举，逐个点击设备信息、只读配对状态、应用列表和限时日志采样，确认所有通道锁定精确 UDID、采样到期不留驻子进程。验证 go-ios screenshot 在匹配 Developer Disk Image 下的默认采样预览、暂停/恢复、剪贴板/电脑截图，以及仅 SSH 端点的诚实降级提示。同时验证 IPA 解析，go-ios USB 安装与 SSH 设备安装器的自动选路，用户/系统 App 清单、`.app` 分析归档及临时文件清理，USB 转发与私网 LAN SSH、随包 Mobius SSH/SFTP 的密码/私钥认证、允许目录文件边界、首次/变更主机密钥、空格与单引号路径、Frida 回环隧道，以及概览/进程/固定路径工具/syslog 四类 SSH 诊断。另在安装 libimobiledevice/`iproxy` 的隔离环境中分别制造 go-ios 单项失败，验证兼容回退绑定同一 UDID 且不会掩盖双重失败。Respring/重启只在可恢复的专用测试机上验证实际 SSH 目标展示、30 秒单次票据与过期/重放拒绝。
+10. 在 iOS `网络` 页分别验证随包 go-ios 的 USB 本机→设备、`iproxy` 兼容回退、SSH `-L` 的本机→设备与 SSH `-R` 的设备→本机。使用监听检查确认 go-ios 与 `iproxy` 的主机端都只有 `127.0.0.1`，SSH 转发规格的两端也均为 `127.0.0.1`；USB 反向请求被拒绝，且不可用本机端口不会被覆盖。再替换为上游未补丁或版本输出异常的 go-ios，确认它不能进入 USB 转发路径。停止单条隧道时不影响外部 go-ios/`iproxy`/`ssh`；关闭 SSH 会话时清理该会话的 `-L`/`-R`，独立 USB 转发保持到手动停止或应用退出，应用退出后不应留下任何 Mobius 受管 iOS 隧道。
 11. 验证 Reverse 与 Android 系统代理始终分开：只有显式按钮才写系统代理。在无代理和既有静态代理上分别验证五字段快照恢复、`:0` 清理内存/变更广播和退出清理；在任一字段被外部程序改动时确认 Mobius 不覆盖新值，在现有 PAC/非空排除列表上确认它在任何写入前拒绝操作。
 12. 核对应用未把内嵌屏幕令牌、配对码、SSH 密码、证书、私钥、用户目录、设备 UDID 或测试数据写入公开日志或本地偏好设置。
 13. 确认 Release 中的说明没有把未完成能力表述为已交付，且实际功能严格符合设备开发、调试与管理白名单。
 
-> 真机验收必须保存实际 UDID 被 `idevice_id -l` 或 `idevice_id -n` 枚举、命令结果和隧道端到端连通的内部证据。本轮开发环境中 `idevice_id -l` 未返回设备，因此当前只能记录代码/构建/单元测试结果，**不能记为 iOS 真机验收通过**。
+> 真机验收必须保存实际 UDID 被随包 `ios list --details` 枚举、固定操作结果和隧道端到端连通的内部证据；兼容回退测试另保存 `idevice_id -l/-n` 结果。未实际返回设备的环境只能记录代码、构建和单元测试结果，**不能记为 iOS 真机验收通过**。
 
 ## 本地构建与 CI 的关系
 
@@ -107,8 +128,16 @@ git push origin v0.1.0
 
 ```bash
 pnpm install --frozen-lockfile
+python3 scripts/prepare_tool_bundle.py \
+  --target macos-aarch64 \
+  --output src-tauri/resources/tools/macos-aarch64
+python3 scripts/verify_tool_bundle.py \
+  --target macos-aarch64 \
+  --root src-tauri/resources/tools
 pnpm run build
 pnpm run tauri build
 ```
+
+示例目标为 Apple Silicon；必须替换为当前原生目标。Windows 在发布工作流所用的 MSYS2 MINGW64 环境中运行对应 `python` 命令。准备脚本会联网下载锁定输入并从源码构建 FFmpeg/go-ios/Mobius SSH，安装后的应用自身不会下载工具。
 
 不要把从 macOS 交叉生成的 Windows/Linux 文件当作正式发布结果。安装器格式、系统 WebView、驱动、原生依赖、代码签名和启动行为都必须在目标操作系统上验证。

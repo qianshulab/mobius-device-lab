@@ -1,0 +1,634 @@
+{
+  "schemaVersion": 1,
+  "bundleRevision": 3,
+  "components": {
+    "scrcpy": {
+      "version": "4.1",
+      "license": "Apache-2.0",
+      "projectUrl": "https://github.com/Genymobile/scrcpy",
+      "source": {
+        "url": "https://codeload.github.com/Genymobile/scrcpy/tar.gz/refs/tags/v4.1",
+        "size": 493134,
+        "sha256": "537b2ade623cb94b6edddfa5c61bf0b0af21484aa8365ea2531b686ea573249a",
+        "archive": "tar.gz",
+        "root": "scrcpy-4.1",
+        "fileName": "scrcpy-4.1.tar.gz"
+      },
+      "licenseFiles": [
+        {
+          "path": "LICENSE",
+          "destination": "licenses/scrcpy-LICENSE.txt"
+        }
+      ],
+      "portableDependencies": {
+        "ffmpeg": {
+          "version": "8.1.2",
+          "license": "LGPL-2.1-or-later",
+          "projectUrl": "https://ffmpeg.org/",
+          "source": {
+            "url": "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz",
+            "size": 11710924,
+            "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+            "archive": "tar.xz",
+            "root": "ffmpeg-8.1.2",
+            "fileName": "ffmpeg-8.1.2.tar.xz"
+          },
+          "licenseFiles": [
+            {
+              "path": "COPYING.LGPLv2.1",
+              "destination": "licenses/scrcpy-ffmpeg-COPYING.LGPLv2.1.txt"
+            },
+            {
+              "path": "COPYING.LGPLv3",
+              "destination": "licenses/scrcpy-ffmpeg-COPYING.LGPLv3.txt"
+            },
+            {
+              "path": "LICENSE.md",
+              "destination": "licenses/scrcpy-ffmpeg-LICENSE.md"
+            }
+          ],
+          "linkage": {
+            "windows-x86_64": "shared",
+            "linux-x86_64": "static",
+            "macos-aarch64": "static",
+            "macos-x86_64": "static"
+          }
+        },
+        "sdl": {
+          "version": "3.4.12",
+          "license": "Zlib AND BSD-3-Clause",
+          "projectUrl": "https://github.com/libsdl-org/SDL",
+          "source": {
+            "url": "https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.4.12.tar.gz",
+            "size": 15846095,
+            "sha256": "b68381f06a7580e63400b3b6eb547ec57d8c3ebde70f9f40e0aba530ba05da27",
+            "archive": "tar.gz",
+            "root": "SDL-release-3.4.12",
+            "fileName": "sdl-3.4.12.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE.txt",
+              "destination": "licenses/scrcpy-sdl-LICENSE.txt"
+            },
+            {
+              "path": "src/hidapi/LICENSE.txt",
+              "destination": "licenses/scrcpy-sdl-hidapi-LICENSE.txt"
+            },
+            {
+              "path": "src/hidapi/LICENSE-bsd.txt",
+              "destination": "licenses/scrcpy-sdl-hidapi-LICENSE-bsd.txt"
+            },
+            {
+              "path": "src/video/yuv2rgb/LICENSE",
+              "destination": "licenses/scrcpy-sdl-yuv2rgb-LICENSE.txt"
+            },
+            {
+              "path": "src/events/imKStoUCS.c",
+              "destination": "licenses/scrcpy-sdl-imKStoUCS-notice.c.txt"
+            },
+            {
+              "path": "src/video/x11/edid-parse.c",
+              "destination": "licenses/scrcpy-sdl-edid-parse-notice.c.txt"
+            },
+            {
+              "path": "src/video/x11/xsettings-client.c",
+              "destination": "licenses/scrcpy-sdl-xsettings-client-notice.c.txt"
+            },
+            {
+              "path": "src/video/stb_image.h",
+              "destination": "licenses/scrcpy-sdl-stb_image-LICENSE.h.txt"
+            },
+            {
+              "path": "include/SDL3/SDL_opengles2_khrplatform.h",
+              "destination": "licenses/scrcpy-sdl-khrplatform-notice.h.txt"
+            },
+            {
+              "path": "src/video/khronos/EGL/egl.h",
+              "destination": "licenses/scrcpy-sdl-khronos-EGL-notice.h.txt"
+            },
+            {
+              "path": "src/video/khronos/vulkan/vulkan_core.h",
+              "destination": "licenses/scrcpy-sdl-khronos-Vulkan-notice.h.txt"
+            }
+          ],
+          "linkage": {
+            "windows-x86_64": "shared",
+            "linux-x86_64": "static",
+            "macos-aarch64": "static",
+            "macos-x86_64": "static"
+          }
+        },
+        "libusb": {
+          "version": "1.0.30",
+          "license": "LGPL-2.1-or-later",
+          "projectUrl": "https://github.com/libusb/libusb",
+          "source": {
+            "url": "https://github.com/libusb/libusb/archive/refs/tags/v1.0.30.tar.gz",
+            "size": 436332,
+            "sha256": "2ae28adb0bb9558c86135c4e1c11b320b0805461e207a64a6e520a114094bf07",
+            "archive": "tar.gz",
+            "root": "libusb-1.0.30",
+            "fileName": "libusb-1.0.30.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "COPYING",
+              "destination": "licenses/scrcpy-libusb-COPYING.txt"
+            }
+          ],
+          "linkage": {
+            "windows-x86_64": "shared",
+            "linux-x86_64": "static",
+            "macos-aarch64": "static",
+            "macos-x86_64": "static"
+          }
+        },
+        "dav1d": {
+          "version": "1.5.3",
+          "license": "BSD-2-Clause",
+          "projectUrl": "https://code.videolan.org/videolan/dav1d",
+          "source": {
+            "url": "https://codeload.github.com/videolan/dav1d/tar.gz/refs/tags/1.5.3",
+            "size": 1713950,
+            "sha256": "cbe212b02faf8c6eed5b6d55ef8a6e363aaab83f15112e960701a9c3df813686",
+            "archive": "tar.gz",
+            "root": "dav1d-1.5.3",
+            "fileName": "dav1d-1.5.3.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "COPYING",
+              "destination": "licenses/scrcpy-dav1d-COPYING.txt"
+            },
+            {
+              "path": "doc/PATENTS",
+              "destination": "licenses/scrcpy-dav1d-PATENTS.txt"
+            }
+          ],
+          "linkage": {
+            "windows-x86_64": "static-into-ffmpeg",
+            "linux-x86_64": "static-into-ffmpeg",
+            "macos-aarch64": "static-into-ffmpeg",
+            "macos-x86_64": "static-into-ffmpeg"
+          }
+        },
+        "mingw-w64": {
+          "version": "11.0.1",
+          "license": "Various permissive licenses (see COPYING.MinGW-w64-runtime.txt)",
+          "projectUrl": "https://www.mingw-w64.org/",
+          "source": {
+            "url": "https://archive.ubuntu.com/ubuntu/pool/universe/m/mingw-w64/mingw-w64_11.0.1.orig.tar.bz2",
+            "size": 10057401,
+            "sha256": "3f66bce069ee8bed7439a1a13da7cb91a5e67ea6170f21317ac7f5794625ee10",
+            "archive": "tar.bz2",
+            "root": "mingw-w64-v11.0.1",
+            "fileName": "mingw-w64-11.0.1.tar.bz2"
+          },
+          "licenseFiles": [
+            {
+              "path": "COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt",
+              "destination": "licenses/scrcpy-mingw-w64-runtime-NOTICE.txt",
+              "size": 10936,
+              "sha256": "e9b2dc02451ea29092a1f25fa0f3c07207ed421f1807dffb0c4e6dce69dee7bd"
+            }
+          ],
+          "linkage": {
+            "windows-x86_64": "static-runtime"
+          }
+        },
+        "zlib": {
+          "license": "Zlib",
+          "projectUrl": "https://zlib.net/",
+          "targets": {
+            "windows-x86_64": {
+              "version": "1.3.1",
+              "linkage": "static-into-ffmpeg",
+              "source": {
+                "url": "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+                "size": 1512791,
+                "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+                "archive": "tar.gz",
+                "root": "zlib-1.3.1",
+                "fileName": "zlib-1.3.1.tar.gz"
+              },
+              "licenseFiles": [
+                {
+                  "path": "LICENSE",
+                  "destination": "licenses/scrcpy-zlib-1.3.1-LICENSE.txt"
+                }
+              ]
+            },
+            "linux-x86_64": {
+              "version": "1.2.11",
+              "linkage": "static-into-ffmpeg",
+              "source": {
+                "url": "https://zlib.net/fossils/zlib-1.2.11.tar.gz",
+                "size": 607698,
+                "sha256": "c3e5e9fdd5004dcb542feda5ee4f0ff0744628baf8ed2dd5d66f8ca1197cb1a1",
+                "archive": "tar.gz",
+                "root": "zlib-1.2.11",
+                "fileName": "zlib-1.2.11.tar.gz"
+              },
+              "licenseFiles": [
+                {
+                  "path": "README",
+                  "destination": "licenses/scrcpy-zlib-1.2.11-README.txt"
+                },
+                {
+                  "path": "zlib.h",
+                  "destination": "licenses/scrcpy-zlib-1.2.11-zlib.h.txt"
+                }
+              ]
+            },
+            "macos-aarch64": {
+              "version": "1.3.2",
+              "linkage": "static-into-ffmpeg",
+              "source": {
+                "url": "https://zlib.net/fossils/zlib-1.3.2.tar.gz",
+                "size": 1502830,
+                "sha256": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16",
+                "archive": "tar.gz",
+                "root": "zlib-1.3.2",
+                "fileName": "zlib-1.3.2.tar.gz"
+              },
+              "licenseFiles": [
+                {
+                  "path": "LICENSE",
+                  "destination": "licenses/scrcpy-zlib-1.3.2-LICENSE.txt"
+                }
+              ]
+            },
+            "macos-x86_64": {
+              "version": "system-libz",
+              "linkage": "system"
+            }
+          }
+        }
+      },
+      "androidPlatformTools": {
+        "version": "37.0.0",
+        "license": "Apache-2.0",
+        "projectUrl": "https://android.googlesource.com/platform/packages/modules/adb/",
+        "targets": {
+          "windows-x86_64": {
+            "url": "https://dl.google.com/android/repository/platform-tools_r37.0.0-win.zip",
+            "size": 8092164,
+            "sha256": "4fe305812db074cea32903a489d061eb4454cbc90a49e8fea677f4b7af764918",
+            "archive": "zip",
+            "root": "platform-tools",
+            "notice": {
+              "path": "NOTICE.txt",
+              "size": 1154858,
+              "sha256": "628f43e9c88e2bf5aee9fc4c1cb672bf3931ba12dd5ef75c8170678395f3ca23"
+            },
+            "matchedFiles": [
+              {
+                "path": "adb.exe",
+                "size": 8485016,
+                "sha256": "957e46b8615f7af5b7292a2ddabe98d2e61940c3fb2b0545756507f080613e71"
+              },
+              {
+                "path": "AdbWinApi.dll",
+                "size": 108184,
+                "sha256": "120bef587119c6cb926b86b9be90fdfbce38937588eae28cd91a94ce63c7b965"
+              },
+              {
+                "path": "AdbWinUsbApi.dll",
+                "size": 73368,
+                "sha256": "6ca69a2ca0e31309c087d288f058977d421ad03500e4c3e1dbd981241a069c60"
+              }
+            ]
+          },
+          "linux-x86_64": {
+            "url": "https://dl.google.com/android/repository/platform-tools_r37.0.0-linux.zip",
+            "size": 9167924,
+            "sha256": "198ae156ab285fa555987219af237b31102fefe8b9d2bc274708a8d4f2865a07",
+            "archive": "zip",
+            "root": "platform-tools",
+            "notice": {
+              "path": "NOTICE.txt",
+              "size": 1177384,
+              "sha256": "3aaf99086d24f1546b834697950a68ecefd110aa6a4a75bdefcb30906a66001b"
+            },
+            "matchedFiles": [
+              {
+                "path": "adb",
+                "size": 11150112,
+                "sha256": "00108217733707a40debfc92c86d4232fd6e68870be5966515d74c071193ea90"
+              }
+            ]
+          },
+          "macos-aarch64": {
+            "url": "https://dl.google.com/android/repository/platform-tools_r37.0.0-darwin.zip",
+            "size": 16442240,
+            "sha256": "094a1395683c509fd4d48667da0d8b5ef4d42b2abfcd29f2e8149e2f989357c7",
+            "archive": "zip",
+            "root": "platform-tools",
+            "notice": {
+              "path": "NOTICE.txt",
+              "size": 1153968,
+              "sha256": "f74735e1636534c2165b51815c4de870a2a06c24d8fe3e8c91149c841b81d33e"
+            },
+            "matchedFiles": [
+              {
+                "path": "adb",
+                "size": 19993936,
+                "sha256": "9fdf861259dc807937b13afdd5f053c7fda9f3b7726933fe0e0f45130ecb8dc7"
+              }
+            ]
+          },
+          "macos-x86_64": {
+            "url": "https://dl.google.com/android/repository/platform-tools_r37.0.0-darwin.zip",
+            "size": 16442240,
+            "sha256": "094a1395683c509fd4d48667da0d8b5ef4d42b2abfcd29f2e8149e2f989357c7",
+            "archive": "zip",
+            "root": "platform-tools",
+            "notice": {
+              "path": "NOTICE.txt",
+              "size": 1153968,
+              "sha256": "f74735e1636534c2165b51815c4de870a2a06c24d8fe3e8c91149c841b81d33e"
+            },
+            "matchedFiles": [
+              {
+                "path": "adb",
+                "size": 19993936,
+                "sha256": "9fdf861259dc807937b13afdd5f053c7fda9f3b7726933fe0e0f45130ecb8dc7"
+              }
+            ]
+          }
+        }
+      },
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-win64-v4.1.zip",
+          "size": 11305298,
+          "sha256": "5b12172b3264b2889f4583ee64752ce832e29bc8b1089dca81093459697165db",
+          "archive": "zip",
+          "root": "scrcpy-win64-v4.1"
+        },
+        "linux-x86_64": {
+          "url": "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-linux-x86_64-v4.1.tar.gz",
+          "size": 17762813,
+          "sha256": "ad56ae8bfeedf41e824945c11dbf55fcb092b3e615b9b486f48a50e30d389635",
+          "archive": "tar.gz",
+          "root": "scrcpy-linux-x86_64-v4.1"
+        },
+        "macos-aarch64": {
+          "url": "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-macos-aarch64-v4.1.tar.gz",
+          "size": 12981888,
+          "sha256": "20fd47c9014dd5e0fa77091f3cb7adbda8445a360c4584aeaa0150b5b3988ff3",
+          "archive": "tar.gz",
+          "root": "scrcpy-macos-aarch64-v4.1"
+        },
+        "macos-x86_64": {
+          "url": "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-macos-x86_64-v4.1.tar.gz",
+          "size": 13904869,
+          "sha256": "ee2a7223bc8dbdc4f482db1134bcf441178dafb833492b71ca4c22090c58ce72",
+          "archive": "tar.gz",
+          "root": "scrcpy-macos-x86_64-v4.1"
+        }
+      }
+    },
+    "aapt2": {
+      "version": "9.4.0-15978811",
+      "license": "Apache-2.0",
+      "projectUrl": "https://android.googlesource.com/platform/frameworks/base/+/master/tools/aapt2/",
+      "targets": {
+        "windows-x86_64": {
+          "url": "https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/9.4.0-15978811/aapt2-9.4.0-15978811-windows.jar",
+          "size": 2165877,
+          "sha256": "5fe3c8ee5c6b3f47efd1fced1d6418084037f54f13290816c5db717e6b5c92aa",
+          "archive": "zip",
+          "binary": "aapt2.exe"
+        },
+        "linux-x86_64": {
+          "url": "https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/9.4.0-15978811/aapt2-9.4.0-15978811-linux.jar",
+          "size": 2385035,
+          "sha256": "f5bebd466ecf14d341fd465f2756a16d86052f29eb4532003d5ff7bcffd08de5",
+          "archive": "zip",
+          "binary": "aapt2"
+        },
+        "macos-aarch64": {
+          "url": "https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/9.4.0-15978811/aapt2-9.4.0-15978811-osx.jar",
+          "size": 4486407,
+          "sha256": "eb93ce9d0fa121333f12395b3ab30822c5cdb9155737f20d342fe71809757059",
+          "archive": "zip",
+          "binary": "aapt2"
+        },
+        "macos-x86_64": {
+          "url": "https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/9.4.0-15978811/aapt2-9.4.0-15978811-osx.jar",
+          "size": 4486407,
+          "sha256": "eb93ce9d0fa121333f12395b3ab30822c5cdb9155737f20d342fe71809757059",
+          "archive": "zip",
+          "binary": "aapt2"
+        }
+      }
+    },
+    "go-ios": {
+      "version": "1.3.2-mobius.1",
+      "upstreamVersion": "1.3.2",
+      "commit": "2fb34682ef12db97c9fafdf99f1dd1d3522604ad",
+      "goVersion": "1.26.5",
+      "license": "MIT",
+      "projectUrl": "https://github.com/danielpaulus/go-ios",
+      "source": {
+        "url": "https://codeload.github.com/danielpaulus/go-ios/tar.gz/refs/tags/v1.3.2",
+        "size": 11987946,
+        "sha256": "ee5283359650cd7040f785d0eb8c6376b09bca3255cb20bcbfc4e8769f4a25bb",
+        "archive": "tar.gz",
+        "root": "go-ios-1.3.2",
+        "fileName": "go-ios-1.3.2.tar.gz"
+      },
+      "licenseFiles": [
+        {
+          "path": "LICENSE",
+          "destination": "licenses/go-ios-LICENSE.txt"
+        }
+      ],
+      "goToolchain": {
+        "version": "1.26.5",
+        "license": "BSD-3-Clause",
+        "projectUrl": "https://go.dev/",
+        "source": {
+          "url": "https://go.dev/dl/go1.26.5.src.tar.gz",
+          "size": 34140216,
+          "sha256": "495be4bc87176ac567392e5b4116abd98466d33d7b49d41e764ccc6976b2dc42",
+          "archive": "tar.gz",
+          "root": "go",
+          "fileName": "go-1.26.5.tar.gz"
+        },
+        "licenseFiles": [
+          {
+            "path": "LICENSE",
+            "destination": "licenses/go-LICENSE.txt",
+            "size": 1453,
+            "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+          }
+        ]
+      },
+      "patch": "packaging/patches/go-ios-1.3.2-mobius.patch"
+    },
+    "mobius-ssh": {
+      "version": "0.2.0",
+      "goVersion": "1.26.5",
+      "license": "Mobius first-party source",
+      "projectUrl": "https://github.com/qianshulab/mobius-device-lab",
+      "sourcePath": "tools/mobius-ssh",
+      "dependencies": [
+        {
+          "module": "golang.org/x/crypto",
+          "version": "v0.56.0",
+          "license": "BSD-3-Clause",
+          "projectUrl": "https://github.com/golang/crypto",
+          "source": {
+            "url": "https://codeload.github.com/golang/crypto/tar.gz/refs/tags/v0.56.0",
+            "size": 2169461,
+            "sha256": "1497798cf42fde7239a3dc5f2f0bebc461097719bb99fba2475b2a1f0e0b90fb",
+            "archive": "tar.gz",
+            "root": "crypto-0.56.0",
+            "fileName": "golang-crypto-0.56.0.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE",
+              "destination": "licenses/mobius-ssh-x-crypto-LICENSE.txt"
+            },
+            {
+              "path": "PATENTS",
+              "destination": "licenses/mobius-ssh-x-crypto-PATENTS.txt"
+            }
+          ],
+          "usedBy": [
+            "windows-x86_64",
+            "linux-x86_64",
+            "macos-aarch64",
+            "macos-x86_64"
+          ]
+        },
+        {
+          "module": "github.com/pkg/sftp",
+          "version": "v1.13.11",
+          "license": "BSD-2-Clause",
+          "projectUrl": "https://github.com/pkg/sftp",
+          "source": {
+            "url": "https://codeload.github.com/pkg/sftp/tar.gz/refs/tags/v1.13.11",
+            "size": 126768,
+            "sha256": "9d433b45c4bf4401354f2a8194d2d48565f6b84f5c0ea30f493855946aacee7f",
+            "archive": "tar.gz",
+            "root": "sftp-1.13.11",
+            "fileName": "pkg-sftp-1.13.11.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE",
+              "destination": "licenses/mobius-ssh-pkg-sftp-LICENSE.txt"
+            }
+          ],
+          "usedBy": [
+            "windows-x86_64",
+            "linux-x86_64",
+            "macos-aarch64",
+            "macos-x86_64"
+          ]
+        },
+        {
+          "module": "github.com/kr/fs",
+          "version": "v0.1.0",
+          "license": "BSD-3-Clause",
+          "projectUrl": "https://github.com/kr/fs",
+          "source": {
+            "url": "https://codeload.github.com/kr/fs/tar.gz/refs/tags/v0.1.0",
+            "size": 4405,
+            "sha256": "5743b4ec1e7c4a336c40c9936989174dc9bfc1fb19640d7308c04892453f6c8d",
+            "archive": "tar.gz",
+            "root": "fs-0.1.0",
+            "fileName": "kr-fs-0.1.0.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE",
+              "destination": "licenses/mobius-ssh-kr-fs-LICENSE.txt"
+            }
+          ],
+          "usedBy": [
+            "windows-x86_64",
+            "linux-x86_64",
+            "macos-aarch64",
+            "macos-x86_64"
+          ]
+        },
+        {
+          "module": "golang.org/x/sys",
+          "version": "v0.47.0",
+          "license": "BSD-3-Clause",
+          "projectUrl": "https://github.com/golang/sys",
+          "source": {
+            "url": "https://codeload.github.com/golang/sys/tar.gz/refs/tags/v0.47.0",
+            "size": 1550584,
+            "sha256": "85733c6da0f8db2f380a4487f6229d44affcb69d7d4fc0e102b53214a248b14d",
+            "archive": "tar.gz",
+            "root": "sys-0.47.0",
+            "fileName": "golang-sys-0.47.0.tar.gz"
+          },
+          "licenseFiles": [
+            {
+              "path": "LICENSE",
+              "destination": "licenses/mobius-ssh-x-sys-LICENSE.txt"
+            },
+            {
+              "path": "PATENTS",
+              "destination": "licenses/mobius-ssh-x-sys-PATENTS.txt"
+            }
+          ],
+          "usedBy": [
+            "windows-x86_64"
+          ]
+        }
+      ]
+    },
+    "ffmpeg": {
+      "version": "9.0.1",
+      "license": "LGPL-2.1-or-later",
+      "projectUrl": "https://ffmpeg.org/",
+      "source": {
+        "url": "https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz",
+        "size": 12036420,
+        "sha256": "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635",
+        "archive": "tar.xz",
+        "root": "ffmpeg-9.0.1",
+        "fileName": "ffmpeg-9.0.1.tar.xz"
+      },
+      "licenseFiles": [
+        {
+          "path": "COPYING.LGPLv2.1",
+          "destination": "licenses/ffmpeg-COPYING.LGPLv2.1.txt"
+        },
+        {
+          "path": "LICENSE.md",
+          "destination": "licenses/ffmpeg-LICENSE.md"
+        }
+      ],
+      "configure": [
+        "--disable-everything",
+        "--disable-autodetect",
+        "--disable-doc",
+        "--disable-debug",
+        "--disable-network",
+        "--disable-ffprobe",
+        "--disable-ffplay",
+        "--enable-ffmpeg",
+        "--enable-protocol=file",
+        "--enable-protocol=pipe",
+        "--enable-demuxer=h264",
+        "--enable-parser=h264",
+        "--enable-decoder=h264",
+        "--enable-filter=format",
+        "--enable-filter=scale",
+        "--enable-encoder=mjpeg",
+        "--enable-muxer=mpjpeg",
+        "--enable-small"
+      ]
+    }
+  }
+}

@@ -1,4 +1,4 @@
-use super::blocking_api;
+use super::{blocking_api, ios_native};
 use crate::{
     models::{
         ApiError, ApiResult, AppResult, IosHostDiagnosticKind, IosHostDiagnosticRequest,
@@ -29,11 +29,10 @@ fn run_ios_host_diagnostic_inner(
 ) -> AppResult<IosHostDiagnosticResult> {
     validation::serial(&request.udid)?;
     let timeout = diagnostic_timeout(request.kind, request.timeout_ms)?;
-    let (tool, args) = diagnostic_invocation(request.kind, &request.udid, request.network);
+    let (tool, process) = run_diagnostic(request.kind, &request.udid, request.network, timeout)?;
     // run_process is intentionally used instead of run_checked: a syslog capture
     // is successful when the bounded collection window expires and the child is
     // stopped by the runner.
-    let process = run_process(tool, &args, timeout, &[])?;
     let (output, output_truncated) = sanitize_and_limit(&process.stdout, MAX_OUTPUT_BYTES);
     let (stderr, stderr_truncated) = sanitize_and_limit(&process.stderr, MAX_STDERR_BYTES);
 
@@ -60,7 +59,7 @@ fn run_ios_host_diagnostic_inner(
         ));
     }
 
-    let (title, source) = diagnostic_metadata(request.kind, timeout);
+    let (title, source) = diagnostic_metadata(request.kind, timeout, &tool);
     let mut warnings = Vec::new();
     if process.truncated || output_truncated || stderr_truncated {
         warnings.push("Output reached the bounded capture limit and was truncated".into());
@@ -73,7 +72,7 @@ fn run_ios_host_diagnostic_inner(
         source,
         udid: request.udid,
         network: request.network,
-        tool: tool.to_string(),
+        tool,
         output,
         stderr: (!stderr.is_empty()).then_some(stderr),
         exit_code: process.exit_code,
@@ -84,7 +83,22 @@ fn run_ios_host_diagnostic_inner(
     })
 }
 
-fn diagnostic_metadata(kind: IosHostDiagnosticKind, timeout: Duration) -> (&'static str, String) {
+fn diagnostic_metadata(
+    kind: IosHostDiagnosticKind,
+    timeout: Duration,
+    tool: &str,
+) -> (&'static str, String) {
+    if tool == "ios" {
+        return match kind {
+            IosHostDiagnosticKind::DeviceInfo => ("iOS 设备信息", "go-ios info".into()),
+            IosHostDiagnosticKind::Pairing => ("配对状态", "go-ios info · 只读连接验证".into()),
+            IosHostDiagnosticKind::Apps => ("已安装应用", "go-ios apps --all".into()),
+            IosHostDiagnosticKind::Syslog => (
+                "设备实时日志采样",
+                format!("go-ios syslog · {} ms 采样", timeout.as_millis()),
+            ),
+        };
+    }
     match kind {
         IosHostDiagnosticKind::DeviceInfo => ("libimobiledevice 设备信息", "ideviceinfo".into()),
         IosHostDiagnosticKind::Pairing => ("配对状态", "idevicepair validate".into()),
@@ -93,6 +107,37 @@ fn diagnostic_metadata(kind: IosHostDiagnosticKind, timeout: Duration) -> (&'sta
             "设备实时日志采样",
             format!("idevicesyslog · {} ms 采样", timeout.as_millis()),
         ),
+    }
+}
+
+fn run_diagnostic(
+    kind: IosHostDiagnosticKind,
+    udid: &str,
+    network: bool,
+    timeout: Duration,
+) -> AppResult<(String, crate::runner::ProcessOutput)> {
+    if ios_native::available() {
+        let (command, extra_args) = go_ios_diagnostic_invocation(kind);
+        match ios_native::run(command, udid, &extra_args, timeout) {
+            Ok(output)
+                if (kind == IosHostDiagnosticKind::Syslog && output.timed_out)
+                    || (!output.timed_out && output.exit_code == Some(0)) =>
+            {
+                return Ok(("ios".into(), output));
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+
+    let (tool, args) = diagnostic_invocation(kind, udid, network);
+    run_process(tool, &args, timeout, &[]).map(|output| (tool.into(), output))
+}
+
+fn go_ios_diagnostic_invocation(kind: IosHostDiagnosticKind) -> (&'static str, Vec<String>) {
+    match kind {
+        IosHostDiagnosticKind::DeviceInfo | IosHostDiagnosticKind::Pairing => ("info", Vec::new()),
+        IosHostDiagnosticKind::Apps => ("apps", vec!["--all".into()]),
+        IosHostDiagnosticKind::Syslog => ("syslog", Vec::new()),
     }
 }
 
@@ -206,6 +251,14 @@ mod tests {
                     .map(str::to_string)
                     .collect()
             )
+        );
+    }
+
+    #[test]
+    fn go_ios_pairing_check_is_read_only() {
+        assert_eq!(
+            go_ios_diagnostic_invocation(IosHostDiagnosticKind::Pairing),
+            ("info", Vec::new())
         );
     }
 

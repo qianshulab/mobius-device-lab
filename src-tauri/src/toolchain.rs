@@ -51,8 +51,10 @@ fn resolver_state() -> &'static RwLock<ResolverState> {
 pub(crate) fn initialize(resource_dir: Option<PathBuf>, app_config_dir: Option<PathBuf>) {
     let mut bundled_roots = Vec::new();
     if let Some(resource_dir) = resource_dir.filter(|path| path.is_absolute()) {
-        bundled_roots.push(resource_dir.join("tools"));
         bundled_roots.push(resource_dir.join("resources").join("tools"));
+        // Keep the legacy layout as a fallback for older package layouts, but
+        // prefer Tauri's actual signed resource tree.
+        bundled_roots.push(resource_dir.join("tools"));
     }
     #[cfg(debug_assertions)]
     bundled_roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/tools"));
@@ -115,7 +117,7 @@ pub(crate) fn resolve_tool(program: &str) -> AppResult<ResolvedTool> {
         )
     })?;
     let sdk_roots = android_sdk_roots();
-    let path_directories = system_path_directories();
+    let path_directories = system_path_directories(program);
     resolve_tool_from_sources(
         program,
         &state.configuration,
@@ -123,6 +125,39 @@ pub(crate) fn resolve_tool(program: &str) -> AppResult<ResolvedTool> {
         &sdk_roots,
         &path_directories,
     )
+}
+
+/// Resolve only from the application's reviewed resource roots. This bypasses
+/// user configuration, SDK locations and PATH for security-sensitive features
+/// that depend on a Mobius-specific patched binary.
+pub(crate) fn resolve_bundled_tool(program: &str) -> AppResult<ResolvedTool> {
+    validate_tool_name(program)?;
+    let state = resolver_state().read().map_err(|_| {
+        ApiError::new(
+            "toolchain_state_error",
+            "Toolchain resolver is temporarily unavailable",
+        )
+    })?;
+    resolve_bundled_tool_from_roots(program, &state.bundled_roots)
+}
+
+fn resolve_bundled_tool_from_roots(
+    program: &str,
+    bundled_roots: &[PathBuf],
+) -> AppResult<ResolvedTool> {
+    validate_tool_name(program)?;
+    let directories = bundled_search_directories(bundled_roots);
+    find_in_directories(&directories, program)
+        .map(|path| ResolvedTool {
+            path,
+            source: ToolSource::Bundled,
+        })
+        .ok_or_else(|| {
+            ApiError::new(
+                "bundled_tool_not_found",
+                format!("Unable to find reviewed bundled {program}"),
+            )
+        })
 }
 
 fn resolve_tool_from_sources(
@@ -134,21 +169,23 @@ fn resolve_tool_from_sources(
 ) -> AppResult<ResolvedTool> {
     validate_tool_name(program)?;
 
-    if let Some(path) = configured_file(configuration, program) {
-        return executable_at(Path::new(path), program)
-            .map(|path| ResolvedTool {
+    let configured_file_error = configured_file(configuration, program).map(|path| {
+        match executable_at(Path::new(path), program) {
+            Ok(path) => Ok(ResolvedTool {
                 path,
                 source: ToolSource::Configured,
-            })
-            .map_err(|error| {
-                ApiError::new(
-                    "configured_tool_unavailable",
-                    format!(
-                        "The configured {program} executable is unavailable: {}",
-                        error.message
-                    ),
-                )
-            });
+            }),
+            Err(error) => Err(ApiError::new(
+                "configured_tool_unavailable",
+                format!(
+                    "The configured {program} executable is unavailable: {}",
+                    error.message
+                ),
+            )),
+        }
+    });
+    if let Some(Ok(resolved)) = configured_file_error.as_ref() {
+        return Ok(resolved.clone());
     }
 
     let mut configured_directories = Vec::new();
@@ -173,6 +210,13 @@ fn resolve_tool_from_sources(
             path,
             source: ToolSource::Bundled,
         });
+    }
+
+    // An upgrade from the preview may leave a now-missing explicit path in
+    // toolchain.json. A reviewed bundled copy is a safe recovery path, but do
+    // not silently substitute an arbitrary SDK/PATH tool for that selection.
+    if let Some(Err(error)) = configured_file_error {
+        return Err(error);
     }
 
     let sdk_directories = android_sdk_directories(program, sdk_roots);
@@ -302,12 +346,31 @@ fn version_path_key(path: &Path) -> Vec<u64> {
         .collect()
 }
 
-fn system_path_directories() -> Vec<PathBuf> {
-    let mut directories = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
-        .filter(|directory| directory.is_absolute())
-        .collect::<Vec<_>>();
+fn system_path_directories(program: &str) -> Vec<PathBuf> {
+    let is_open_ssh = matches!(program, "ssh" | "scp");
+    let mut directories = Vec::new();
+
+    // If a developer explicitly removes the bundled Mobius helper, prefer an
+    // operating-system OpenSSH fallback over an unrelated executable which
+    // happens to appear earlier in the GUI process PATH.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if is_open_ssh {
+        directories.push(PathBuf::from("/usr/bin"));
+    }
+    #[cfg(windows)]
+    if is_open_ssh {
+        if let Some(windows_dir) = std::env::var_os("WINDIR") {
+            directories.push(PathBuf::from(windows_dir).join("System32/OpenSSH"));
+        }
+    }
+
+    directories.extend(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+            .filter(|directory| directory.is_absolute())
+            .collect::<Vec<_>>(),
+    );
     #[cfg(target_os = "macos")]
     directories.extend([
         PathBuf::from("/opt/homebrew/bin"),
@@ -321,8 +384,10 @@ fn system_path_directories() -> Vec<PathBuf> {
         PathBuf::from("/snap/bin"),
     ]);
     #[cfg(windows)]
-    if let Some(windows_dir) = std::env::var_os("WINDIR") {
-        directories.push(PathBuf::from(windows_dir).join("System32/OpenSSH"));
+    if !is_open_ssh {
+        if let Some(windows_dir) = std::env::var_os("WINDIR") {
+            directories.push(PathBuf::from(windows_dir).join("System32/OpenSSH"));
+        }
     }
     deduplicate_paths(&mut directories);
     directories
@@ -541,7 +606,8 @@ fn validate_tool_name(program: &str) -> AppResult<()> {
 fn is_ios_tool(program: &str) -> bool {
     matches!(
         program,
-        "idevice_id"
+        "ios"
+            | "idevice_id"
             | "ideviceinfo"
             | "idevicepair"
             | "ideviceinstaller"
@@ -704,6 +770,29 @@ mod tests {
     }
 
     #[test]
+    fn bundled_only_lookup_ignores_a_configured_ios_shadow() {
+        let tree = TempTree::new();
+        let configured = tree.executable("configured-ios", "ios");
+        let target = bundled_target_directory();
+        let bundled = tree.executable(&format!("bundled/{target}"), "ios");
+        let configuration = ToolchainConfiguration {
+            ios_tools_path: Some(tree.0.join("configured-ios").to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+
+        let ordinary =
+            resolve_tool_from_sources("ios", &configuration, &[tree.0.join("bundled")], &[], &[])
+                .expect("ordinary iOS commands should honor explicit configuration");
+        assert_eq!(ordinary.path, configured);
+        assert_eq!(ordinary.source, ToolSource::Configured);
+
+        let safe = resolve_bundled_tool_from_roots("ios", &[tree.0.join("bundled")])
+            .expect("security-sensitive forwarding should use the bundled copy");
+        assert_eq!(safe.path, bundled);
+        assert_eq!(safe.source, ToolSource::Bundled);
+    }
+
+    #[test]
     fn bundled_precedes_android_sdk_and_path() {
         let tree = TempTree::new();
         let target = bundled_target_directory();
@@ -772,6 +861,27 @@ mod tests {
             resolve_tool_from_sources("adb", &configuration, &[], &[], &[tree.0.join("path")])
                 .expect_err("a stale exact selection must fail closed");
         assert_eq!(error.code, "configured_tool_unavailable");
+    }
+
+    #[test]
+    fn bundled_copy_recovers_a_stale_exact_configuration() {
+        let tree = TempTree::new();
+        let target = bundled_target_directory();
+        let bundled = tree.executable(&format!("bundled/{target}"), "adb");
+        let configuration = ToolchainConfiguration {
+            adb_path: Some(
+                tree.0
+                    .join("configured/missing-adb")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ..Default::default()
+        };
+        let resolved =
+            resolve_tool_from_sources("adb", &configuration, &[tree.0.join("bundled")], &[], &[])
+                .expect("reviewed bundled adb should recover a stale preview path");
+        assert_eq!(resolved.path, bundled);
+        assert_eq!(resolved.source, ToolSource::Bundled);
     }
 
     #[test]

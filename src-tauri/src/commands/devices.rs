@@ -1,10 +1,10 @@
-use super::blocking_api;
+use super::{blocking_api, ios_native};
 use crate::{
     models::{
         AndroidDevice, ApiError, ApiResult, AppResult, Device, IosDevice, IosDeviceInfo,
         OperationResult,
     },
-    runner::{run_checked, run_checked_with_stdin},
+    runner::{resolve_tool, run_checked, run_checked_with_stdin},
     validation,
 };
 use std::{collections::BTreeMap, time::Duration};
@@ -49,7 +49,7 @@ pub async fn list_devices() -> ApiResult<Vec<Device>> {
         if devices.is_empty() && errors.len() == 2 {
             return Err(ApiError::new(
                 "device_tools_unavailable",
-                "Neither adb nor libimobiledevice tools are available",
+                "Neither the Android nor iOS device adapter is available",
             )
             .with_details(serde_json::json!({ "warnings": errors })));
         }
@@ -271,6 +271,28 @@ fn android_properties(serial: &str) -> AppResult<BTreeMap<String, String>> {
 }
 
 fn list_ios_devices_inner() -> AppResult<Vec<IosDevice>> {
+    let mut go_ios_error = None;
+    if ios_native::available() {
+        match ios_native::list_devices(DEVICE_TIMEOUT) {
+            Ok(devices) if !devices.is_empty() || resolve_tool("idevice_id").is_err() => {
+                return Ok(devices);
+            }
+            Ok(_) => {}
+            Err(error) => go_ios_error = Some(error),
+        }
+    }
+
+    match list_ios_devices_libimobiledevice() {
+        Ok(devices) => Ok(devices),
+        Err(fallback) => Err(provider_error(
+            "discover iOS devices",
+            go_ios_error,
+            fallback,
+        )),
+    }
+}
+
+fn list_ios_devices_libimobiledevice() -> AppResult<Vec<IosDevice>> {
     let usb_output = run_checked("idevice_id", &["-l".into()], DEVICE_TIMEOUT)?;
     let network_output = run_checked("idevice_id", &["-n".into()], DEVICE_TIMEOUT).ok();
     let mut connections = BTreeMap::<String, &'static str>::new();
@@ -310,10 +332,37 @@ fn list_ios_devices_inner() -> AppResult<Vec<IosDevice>> {
 
 fn ios_device_info_inner(udid: &str) -> AppResult<IosDeviceInfo> {
     validation::serial(udid)?;
+    let go_ios_error = if ios_native::available() {
+        match ios_native::device_info(udid, DEVICE_TIMEOUT) {
+            Ok(info) => return Ok(info),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
     match ios_device_info_for_transport(udid, false) {
         Ok(info) => Ok(info),
-        Err(_) => ios_device_info_for_transport(udid, true),
+        Err(_) => ios_device_info_for_transport(udid, true).map_err(|fallback| {
+            provider_error("read iOS device information", go_ios_error, fallback)
+        }),
     }
+}
+
+fn provider_error(action: &str, primary: Option<ApiError>, fallback: ApiError) -> ApiError {
+    let Some(primary) = primary else {
+        return fallback;
+    };
+    ApiError::new(
+        "ios_host_providers_failed",
+        format!(
+            "Unable to {action} with go-ios or libimobiledevice: {}; {}",
+            primary.message, fallback.message
+        ),
+    )
+    .with_details(serde_json::json!({
+        "goIos": { "code": primary.code, "message": primary.message },
+        "libimobiledevice": { "code": fallback.code, "message": fallback.message }
+    }))
 }
 
 fn ios_device_info_for_transport(udid: &str, network: bool) -> AppResult<IosDeviceInfo> {

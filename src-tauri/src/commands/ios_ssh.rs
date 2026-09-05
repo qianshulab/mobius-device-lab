@@ -1,4 +1,4 @@
-use super::blocking_api;
+use super::{blocking_api, ios_ports};
 use crate::{
     models::{
         ApiError, ApiResult, AppResult, DeleteIosSshRequest, DownloadIosSshFileRequest,
@@ -6,27 +6,31 @@ use crate::{
         IosSshTunnelStatus, OperationResult, RemoteFileEntry, StartIosSshSessionRequest,
         UploadIosSshFileRequest,
     },
-    runner::{background_command, resolve_tool, run_checked, run_checked_with_env, ProcessOutput},
+    runner::{
+        clear_ambient_ssh_auth_environment, resolve_tool, run_checked, run_checked_with_env,
+        ProcessOutput,
+    },
     state::{AppState, IosSshAuthentication, IosSshConnection, ManagedIosSshSession},
     validation,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    io::{Read, Write},
+    net::{IpAddr, Ipv4Addr, TcpListener},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command},
     sync::atomic::Ordering,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, State};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_SSH_PORT: u16 = 22;
 const SSH_TIMEOUT: Duration = Duration::from_secs(15);
 const FILE_TIMEOUT: Duration = Duration::from_secs(180);
-const TUNNEL_START_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_ALLOWED_ROOTS: usize = 32;
 const MAX_SESSIONS: usize = 16;
 const PROBE_MARKER: &str = "MOBIUS_SSH_READY";
@@ -34,7 +38,9 @@ const PATH_MARKER: &str = "MOBIUS_PATH_READY";
 const TYPE_MARKER: &str = "MOBIUS_TYPE";
 const LIST_MARKER: &str = "MOBIUS_LIST_BEGIN";
 const ASKPASS_MARKER_ENV: &str = "MOBIUS_SSH_ASKPASS";
-const ASKPASS_PASSWORD_ENV: &str = "MOBIUS_SSH_PASSWORD";
+const ASKPASS_PORT_ENV: &str = "MOBIUS_SSH_ASKPASS_PORT";
+const ASKPASS_TOKEN_ENV: &str = "MOBIUS_SSH_ASKPASS_TOKEN";
+const ASKPASS_BROKER_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
 struct ProbeResult {
@@ -58,12 +64,6 @@ struct PendingTunnel {
 impl PendingTunnel {
     fn new(child: Child) -> Self {
         Self { child: Some(child) }
-    }
-
-    fn child_mut(&mut self) -> AppResult<&mut Child> {
-        self.child
-            .as_mut()
-            .ok_or_else(|| ApiError::new("tunnel_state_error", "USB tunnel process is missing"))
     }
 
     fn take(&mut self) -> Option<Child> {
@@ -425,9 +425,9 @@ fn start_ios_ssh_session_inner(
                 validation::serial(&udid)?;
                 let device_port = valid_port(device_port.unwrap_or(DEFAULT_SSH_PORT), "device")?;
                 let host_port = reserve_loopback_port(host_port)?;
-                let mut tunnel = PendingTunnel::new(spawn_iproxy(&udid, host_port, device_port)?);
-                wait_for_tunnel(tunnel.child_mut()?, host_port)?;
-                let alias = format!("mobius-usb-{udid}");
+                let tunnel =
+                    PendingTunnel::new(ios_ports::spawn_usb_tunnel(&udid, host_port, device_port)?);
+                let alias = usb_host_key_alias(&udid);
                 pending_tunnel = Some(tunnel);
                 (
                     "usb".to_string(),
@@ -452,7 +452,7 @@ fn start_ios_ssh_session_inner(
             }
         };
 
-    let session_id = new_session_id();
+    let session_id = new_session_id()?;
     let mut connection = IosSshConnection {
         ssh_host,
         ssh_port,
@@ -546,6 +546,13 @@ fn start_ios_ssh_session_inner(
     Ok(response)
 }
 
+fn usb_host_key_alias(udid: &str) -> String {
+    // URL-safe base64 is injective, uses only the helper's hostname-safe
+    // alphabet, and keeps the longest validated 128-byte identifier below the
+    // 255-byte HostKeyAlias limit. In particular, `:` and `_` cannot collide.
+    format!("mobius-usb-{}", URL_SAFE_NO_PAD.encode(udid.as_bytes()))
+}
+
 fn validate_private_key(value: &str) -> AppResult<PathBuf> {
     let key = validation::local_existing_path(value)?;
     let canonical = key.canonicalize().map_err(|error| {
@@ -567,13 +574,26 @@ fn validate_private_key(value: &str) -> AppResult<PathBuf> {
         ));
     }
     #[cfg(windows)]
-    if canonical.to_string_lossy().starts_with(r"\\") {
+    if windows_private_key_path_uses_unsafe_namespace(&canonical.to_string_lossy()) {
         return Err(ApiError::new(
             "unsafe_private_key_path",
-            "Private keys on network shares are not supported",
+            "Private keys on network shares or unsupported Windows path namespaces are not supported",
         ));
     }
     Ok(canonical)
+}
+
+/// Windows canonicalizes an ordinary drive path to `\\?\C:\...`. Keep that
+/// local verbatim form while rejecting UNC shares, device namespaces, volume
+/// GUIDs, and drive-relative paths.
+#[cfg(any(windows, test))]
+fn windows_private_key_path_uses_unsafe_namespace(value: &str) -> bool {
+    let normalized = value.replace('/', r"\");
+    let Some(verbatim) = normalized.strip_prefix(r"\\?\") else {
+        return normalized.starts_with(r"\\");
+    };
+    let bytes = verbatim.as_bytes();
+    !(bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\')
 }
 
 fn validate_password(value: &str) -> AppResult<()> {
@@ -722,61 +742,20 @@ fn reserve_loopback_port(requested: Option<u16>) -> AppResult<u16> {
         })
 }
 
-fn spawn_iproxy(udid: &str, host_port: u16, device_port: u16) -> AppResult<Child> {
-    let executable = resolve_tool("iproxy")?;
-    background_command(executable)
-        .args([
-            "-u",
-            udid,
-            "-l",
-            "-s",
-            "127.0.0.1",
-            &format!("{host_port}:{device_port}"),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| {
-            ApiError::new(
-                "iproxy_spawn_failed",
-                format!("Unable to start the USB SSH tunnel: {error}"),
-            )
-        })
-}
-
-fn wait_for_tunnel(child: &mut Child, host_port: u16) -> AppResult<()> {
-    let started = Instant::now();
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, host_port));
-    while started.elapsed() < TUNNEL_START_TIMEOUT {
-        if let Some(status) = child.try_wait().map_err(|error| {
-            ApiError::new(
-                "iproxy_state_error",
-                format!("Unable to inspect the USB tunnel: {error}"),
-            )
-        })? {
-            return Err(ApiError::new(
-                "iproxy_start_failed",
-                format!("iproxy exited before the tunnel was ready: {status}"),
-            ));
-        }
-        if TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok() {
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    Err(ApiError::new(
-        "iproxy_start_timeout",
-        "The loopback USB tunnel did not become ready within 5 seconds",
-    ))
-}
-
-fn new_session_id() -> String {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("ios-ssh-{:x}-{nonce:x}", std::process::id())
+fn new_session_id() -> AppResult<String> {
+    let mut random = [0_u8; 16];
+    getrandom::getrandom(&mut random).map_err(|_| {
+        ApiError::new(
+            "ios_ssh_session_id_unavailable",
+            "Unable to create a secure iOS SSH session identifier",
+        )
+    })?;
+    let suffix = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    random.zeroize();
+    Ok(format!("ios-ssh-{suffix}"))
 }
 
 fn validate_session_id(value: &str) -> AppResult<&str> {
@@ -862,6 +841,10 @@ pub(crate) fn ssh_base_args(connection: &IosSshConnection) -> Vec<String> {
 
 pub(crate) fn scp_base_args(connection: &IosSshConnection) -> Vec<String> {
     let mut args = vec![
+        // OpenSSH before 9.0 defaults to the legacy SCP protocol, which
+        // reparses remote paths through a shell. Force SFTP so the same raw,
+        // single-argv path contract is used by bundled and system clients.
+        "-s".into(),
         "-F".into(),
         "none".into(),
         "-P".into(),
@@ -935,21 +918,104 @@ fn askpass_environment(connection: &IosSshConnection) -> AppResult<Vec<(String, 
             format!("Unable to locate the Mobius SSH password helper: {error}"),
         )
     })?;
+    let (port, token) = start_askpass_broker(password.expose_secret())?;
     Ok(vec![
         ("SSH_ASKPASS".into(), helper.to_string_lossy().into_owned()),
         ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
         ("DISPLAY".into(), "mobius:0".into()),
         (ASKPASS_MARKER_ENV.into(), "1".into()),
-        (
-            ASKPASS_PASSWORD_ENV.into(),
-            password.expose_secret().to_owned(),
-        ),
+        (ASKPASS_PORT_ENV.into(), port),
+        (ASKPASS_TOKEN_ENV.into(), token),
     ])
+}
+
+/// Give the SSH client one short-lived, loopback-only opportunity to fetch the
+/// password. A child inherits only a random one-time capability, never the
+/// password itself. The bundled helper removes that capability after use.
+fn start_askpass_broker(password: &str) -> AppResult<(String, String)> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|error| {
+        ApiError::new(
+            "ssh_askpass_unavailable",
+            format!("Unable to start the local SSH password broker: {error}"),
+        )
+    })?;
+    listener.set_nonblocking(true).map_err(|error| {
+        ApiError::new(
+            "ssh_askpass_unavailable",
+            format!("Unable to configure the local SSH password broker: {error}"),
+        )
+    })?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| {
+            ApiError::new(
+                "ssh_askpass_unavailable",
+                format!("Unable to inspect the local SSH password broker: {error}"),
+            )
+        })?
+        .port();
+    let mut random = [0_u8; 32];
+    getrandom::getrandom(&mut random).map_err(|_| {
+        ApiError::new(
+            "ssh_askpass_unavailable",
+            "Unable to generate a one-time SSH password capability",
+        )
+    })?;
+    let token = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    random.zeroize();
+    let broker_token = Zeroizing::new(token.clone());
+    let secret = Zeroizing::new(password.to_owned());
+    thread::Builder::new()
+        .name("mobius-ssh-askpass".into())
+        .spawn(move || {
+            let started = Instant::now();
+            while started.elapsed() < ASKPASS_BROKER_TIMEOUT {
+                match listener.accept() {
+                    Ok((mut stream, peer)) if peer.ip().is_loopback() => {
+                        // Some platforms propagate the listener's nonblocking
+                        // mode to accepted sockets. The broker protocol is one
+                        // fixed-size request, so switch the connected stream
+                        // back to blocking mode before applying short I/O
+                        // deadlines.
+                        if stream.set_nonblocking(false).is_err() {
+                            continue;
+                        }
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                        let mut supplied = [0_u8; 65];
+                        let authorized = stream.read_exact(&mut supplied).is_ok()
+                            && supplied[64] == b'\n'
+                            && &supplied[..64] == broker_token.as_bytes();
+                        supplied.zeroize();
+                        if authorized {
+                            let _ = stream.write_all(secret.as_bytes());
+                            let _ = stream.flush();
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .map_err(|error| {
+            ApiError::new(
+                "ssh_askpass_unavailable",
+                format!("Unable to run the local SSH password broker: {error}"),
+            )
+        })?;
+    Ok((port.to_string(), token))
 }
 
 fn zeroize_askpass_environment(environment: &mut [(String, String)]) {
     for (key, value) in environment {
-        if key == ASKPASS_PASSWORD_ENV {
+        if key == ASKPASS_TOKEN_ENV {
             value.zeroize();
         }
     }
@@ -959,6 +1025,7 @@ pub(crate) fn apply_ssh_auth_environment(
     command: &mut Command,
     connection: &IosSshConnection,
 ) -> AppResult<()> {
+    clear_ambient_ssh_auth_environment(command);
     let mut environment = askpass_environment(connection)?;
     command.envs(environment.iter().map(|(key, value)| (key, value)));
     zeroize_askpass_environment(&mut environment);
@@ -997,10 +1064,9 @@ pub(crate) fn scp_remote_spec(
     remote_path: &str,
 ) -> AppResult<String> {
     validation::remote_path(remote_path)?;
-    // OpenSSH 9 uses SFTP for `scp` by default. The remote path is already one
-    // argv item, so shell quoting here becomes part of the SFTP filename. At
-    // the same time, SFTP's remote-source parser still expands glob syntax;
-    // reject it rather than allowing one selected file to match several.
+    // The bundled `scp` entry point uses SFTP. The remote path is already one
+    // argv item, so shell quoting would become part of the filename. Keep the
+    // same no-glob boundary for explicitly configured OpenSSH fallbacks.
     if remote_path
         .chars()
         .any(|character| matches!(character, '*' | '?' | '[' | ']' | '\\'))
@@ -1496,18 +1562,41 @@ mod tests {
         assert!(!args.iter().any(|argument| argument == "-i"));
 
         let mut environment = askpass_environment(&connection).expect("environment");
-        assert_eq!(
-            environment
-                .iter()
-                .find(|(key, _)| key == ASKPASS_PASSWORD_ENV)
-                .map(|(_, value)| value.as_str()),
-            Some("sample-password")
-        );
+        assert!(!environment
+            .iter()
+            .any(|(_, value)| value.contains("sample-password")));
+        assert!(environment.iter().any(|(key, value)| {
+            key == ASKPASS_PORT_ENV && value.parse::<u16>().is_ok_and(|port| port != 0)
+        }));
+        assert!(environment
+            .iter()
+            .any(|(key, value)| key == ASKPASS_TOKEN_ENV && value.len() == 64));
+        let port: u16 = environment
+            .iter()
+            .find(|(key, _)| key == ASKPASS_PORT_ENV)
+            .and_then(|(_, value)| value.parse().ok())
+            .expect("loopback broker port");
+        let token = environment
+            .iter()
+            .find(|(key, _)| key == ASKPASS_TOKEN_ENV)
+            .map(|(_, value)| value.clone())
+            .expect("one-time token");
+        let mut broker = std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+            .expect("connect broker");
+        broker.write_all(token.as_bytes()).expect("write token");
+        broker.write_all(b"\n").expect("terminate token");
+        broker
+            .shutdown(std::net::Shutdown::Write)
+            .expect("finish broker request");
+        let mut received = Vec::new();
+        broker.read_to_end(&mut received).expect("read password");
+        assert_eq!(received, b"sample-password");
+        received.zeroize();
         zeroize_askpass_environment(&mut environment);
         assert_eq!(
             environment
                 .iter()
-                .find(|(key, _)| key == ASKPASS_PASSWORD_ENV)
+                .find(|(key, _)| key == ASKPASS_TOKEN_ENV)
                 .map(|(_, value)| value.as_str()),
             Some("")
         );
@@ -1529,11 +1618,36 @@ mod tests {
     }
 
     #[test]
+    fn windows_private_key_namespace_accepts_local_verbatim_drive_only() {
+        assert!(!windows_private_key_path_uses_unsafe_namespace(
+            r"\\?\C:\Users\tester\id_ed25519"
+        ));
+        assert!(windows_private_key_path_uses_unsafe_namespace(
+            r"\\server\share\id_ed25519"
+        ));
+        assert!(windows_private_key_path_uses_unsafe_namespace(
+            r"\\?\UNC\server\share\id_ed25519"
+        ));
+        assert!(windows_private_key_path_uses_unsafe_namespace(
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\id_ed25519"
+        ));
+    }
+
+    #[test]
     fn password_validation_never_includes_secret_in_errors() {
         let invalid = "line-one\nline-two";
         let error = validate_password(invalid).expect_err("invalid password");
         assert!(!error.message.contains(invalid));
         assert!(validate_password("alpine").is_ok());
+    }
+
+    #[test]
+    fn session_ids_are_random_and_validate() {
+        let first = new_session_id().expect("first session id");
+        let second = new_session_id().expect("second session id");
+        assert_ne!(first, second);
+        assert!(validate_session_id(&first).is_ok());
+        assert!(validate_session_id(&second).is_ok());
     }
 
     #[test]
@@ -1602,6 +1716,7 @@ mod tests {
         let connection = connection(IosSshAuthentication::PrivateKey(PathBuf::from(
             "/tmp/test-key",
         )));
+        assert!(scp_base_args(&connection).iter().any(|value| value == "-s"));
         let remote_path = "/var/mobile/Library/Preferences/O'Brien Settings.plist";
 
         assert_eq!(
@@ -1626,6 +1741,17 @@ mod tests {
             let error = scp_remote_spec(&connection, remote_path).expect_err("unsafe SCP path");
             assert_eq!(error.code, "unsupported_scp_path");
         }
+    }
+
+    #[test]
+    fn usb_host_key_alias_is_safe_injective_and_bounded() {
+        let colon = usb_host_key_alias("00008110:0012345678901234");
+        let underscore = usb_host_key_alias("00008110_0012345678901234");
+        assert_ne!(colon, underscore);
+        assert!(colon.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        }));
+        assert!(usb_host_key_alias(&":".repeat(128)).len() <= 255);
     }
 
     #[test]

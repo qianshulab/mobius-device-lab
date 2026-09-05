@@ -108,23 +108,23 @@ export default function DebugPage({ activeDevice, initialView = "instrumentation
 
   const runIosHostDiagnostic = async (kind: IosHostDiagnosticKind, label: string) => {
     if (!iosHostReady || !activeDevice || systemBusy) {
-      if (activeDevice?.platform === "ios" && !iosHostReady) notify("warning", "主机工具当前不可用", "请选择一台由 libimobiledevice 发现的在线 USB 或 Wi-Fi iOS 设备。");
+      if (activeDevice?.platform === "ios" && !iosHostReady) notify("warning", "主机工具当前不可用", "请选择一台由 go-ios 或 libimobiledevice 发现的在线 USB / Wi-Fi iOS 设备。");
       return;
     }
     const target = activeDevice;
     const network = iosHostNetwork;
     const command = kind === "deviceInfo"
-      ? "ideviceinfo"
+      ? "iOS 设备信息"
       : kind === "pairing"
-        ? "idevicepair validate"
+        ? "配对状态验证"
         : kind === "apps"
-          ? "ideviceinstaller list --all"
-          : "idevicesyslog · 5 秒采样";
+          ? "已安装应用"
+          : "iOS 系统日志 · 5 秒采样";
     const request = ++systemRequest.current;
     const started = performance.now();
     const busyKey: SystemBusyKey = `ios-host-${kind}`;
     setSystemBusy(busyKey);
-    setSystemResult({ label, command: `主机工具 · ${command}`, output: "", at: new Date().toLocaleTimeString("zh-CN"), running: true, source: network ? "libimobiledevice · Wi-Fi" : "libimobiledevice · USB" });
+    setSystemResult({ label, command: `主机工具 · ${command}`, output: "", at: new Date().toLocaleTimeString("zh-CN"), running: true, source: network ? "go-ios / 兼容工具 · Wi-Fi" : "go-ios / 兼容工具 · USB" });
     record(`开始${label}`, `${target.name} · ${command} · ${network ? "Wi-Fi" : "USB"}`, "info");
     try {
       const result = await api.iosHostDiagnostic(target.id, kind, network);
@@ -304,7 +304,7 @@ export default function DebugPage({ activeDevice, initialView = "instrumentation
     {activeDevice && visibleView === "system" && <div className="debug-grid">
       <Panel className="span-4" title={<>{activeDevice.platform === "ios" ? <Wrench size={17} /> : <Cpu size={17} />} {activeDevice.platform === "ios" ? "iOS 工具" : "系统快捷操作"}</>}>
         {activeDevice.platform === "ios" && <div className="ios-diagnostic-connect">
-          <Tabs value={iosToolSource} onChange={setIosToolSource} options={[{ id: "host", label: "主机 · libimobiledevice" }, { id: "ssh", label: "越狱设备 · SSH" }]} />
+          <Tabs value={iosToolSource} onChange={setIosToolSource} options={[{ id: "host", label: "主机 · go-ios" }, { id: "ssh", label: "越狱设备 · SSH" }]} />
           {iosToolSource === "host" && !iosHostReady && <><InlineNotice tone="warning" title="主机工具需要已配对的 iOS 连接">{activeDevice.connectionSource === "manual" ? "当前是手工登记的 SSH 端点，没有可供 libimobiledevice 使用的 UDID。" : "请通过 USB 或已配对的 Wi-Fi 连接设备后重试。"}</InlineNotice><Button icon={<Link2 size={14} />} onClick={() => setIosToolSource("ssh")}>切换到 SSH 工具</Button></>}
           {iosToolSource === "ssh" && !iosReady && <><InlineNotice tone="warning" title="先建立 SSH 会话">主机工具仍可独立使用；连接越狱设备后可执行固定的 SSH 诊断与设备操作。</InlineNotice><Button variant="primary" icon={<Link2 size={14} />} onClick={onOpenIosFiles}>连接 SSH</Button></>}
         </div>}
@@ -315,10 +315,10 @@ export default function DebugPage({ activeDevice, initialView = "instrumentation
             <button disabled={!androidReady || !!systemBusy} onClick={() => setRebootConfirm(true)}><span className="quick-icon quick-rose">{systemBusy === "reboot" ? <LoaderCircle className="spin" size={19} /> : <RotateCcw size={19} />}</span><span><strong>重启设备</strong><small>确认目标后直接发送重启命令</small></span><ChevronRight size={15} /></button>
           </> : iosToolSource === "host" ? <>
             <div className="ios-system-action-label">主机侧固定工具 · 不需要 SSH</div>
-            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("deviceInfo", "设备信息")}><span className="quick-icon quick-green">{systemBusy === "ios-host-deviceInfo" ? <LoaderCircle className="spin" size={19} /> : <Cpu size={19} />}</span><span><strong>设备信息</strong><small>ideviceinfo · 版本、型号与设备属性</small></span><ChevronRight size={15} /></button>
-            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("pairing", "配对状态")}><span className="quick-icon quick-blue">{systemBusy === "ios-host-pairing" ? <LoaderCircle className="spin" size={19} /> : <CheckCircle2 size={19} />}</span><span><strong>配对状态</strong><small>idevicepair validate · 只验证，不修改配对</small></span><ChevronRight size={15} /></button>
-            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("apps", "已安装应用")}><span className="quick-icon quick-purple">{systemBusy === "ios-host-apps" ? <LoaderCircle className="spin" size={19} /> : <Smartphone size={19} />}</span><span><strong>已安装应用</strong><small>ideviceinstaller · 读取全部应用清单</small></span><ChevronRight size={15} /></button>
-            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("syslog", "系统日志采样")}><span className="quick-icon quick-orange">{systemBusy === "ios-host-syslog" ? <LoaderCircle className="spin" size={19} /> : <ScrollText size={19} />}</span><span><strong>系统日志采样</strong><small>idevicesyslog · 5 秒后自动停止</small></span><ChevronRight size={15} /></button>
+            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("deviceInfo", "设备信息")}><span className="quick-icon quick-green">{systemBusy === "ios-host-deviceInfo" ? <LoaderCircle className="spin" size={19} /> : <Cpu size={19} />}</span><span><strong>设备信息</strong><small>版本、型号与设备属性</small></span><ChevronRight size={15} /></button>
+            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("pairing", "配对状态")}><span className="quick-icon quick-blue">{systemBusy === "ios-host-pairing" ? <LoaderCircle className="spin" size={19} /> : <CheckCircle2 size={19} />}</span><span><strong>配对状态</strong><small>只读验证，不修改配对</small></span><ChevronRight size={15} /></button>
+            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("apps", "已安装应用")}><span className="quick-icon quick-purple">{systemBusy === "ios-host-apps" ? <LoaderCircle className="spin" size={19} /> : <Smartphone size={19} />}</span><span><strong>已安装应用</strong><small>读取全部应用清单</small></span><ChevronRight size={15} /></button>
+            <button disabled={!iosHostReady || !!systemBusy} onClick={() => void runIosHostDiagnostic("syslog", "系统日志采样")}><span className="quick-icon quick-orange">{systemBusy === "ios-host-syslog" ? <LoaderCircle className="spin" size={19} /> : <ScrollText size={19} />}</span><span><strong>系统日志采样</strong><small>5 秒后自动停止</small></span><ChevronRight size={15} /></button>
           </> : <>
             <div className="ios-system-action-label">越狱设备固定诊断 · SSH</div>
             <button disabled={!iosReady || !!systemBusy} onClick={() => void runIosDiagnostic("overview", "设备概览")}><span className="quick-icon quick-green">{systemBusy === "ios-overview" ? <LoaderCircle className="spin" size={19} /> : <Cpu size={19} />}</span><span><strong>设备概览</strong><small>版本、身份、磁盘与内存</small></span><ChevronRight size={15} /></button>
@@ -345,7 +345,7 @@ export default function DebugPage({ activeDevice, initialView = "instrumentation
       <Panel className="span-12 system-target-strip"><div className="system-target">
         {activeDevice.platform === "ios" && iosToolSource === "host" ? <>
           <div><StatusDot status={iosHostReady ? "success" : "warning"} /><span><strong>{activeDevice.name}</strong><small>{activeDevice.id}</small></span></div>
-          <div><StatusDot status={iosHostReady ? "success" : "warning"} /><span><strong>{iosHostReady ? `libimobiledevice · ${iosHostNetwork ? "Wi-Fi" : "USB"}` : "主机通道不可用"}</strong><small>{iosHostReady ? "固定参数直接绑定当前 UDID，不需要 SSH" : "可切换到越狱 SSH 工具"}</small></span></div>
+          <div><StatusDot status={iosHostReady ? "success" : "warning"} /><span><strong>{iosHostReady ? `go-ios · ${iosHostNetwork ? "Wi-Fi" : "USB"}` : "主机通道不可用"}</strong><small>{iosHostReady ? "随包工具优先，libimobiledevice 自动回退" : "可切换到越狱 SSH 工具"}</small></span></div>
         </> : <>
           <div><StatusDot status={activeDevice.platform === "ios" ? iosReady ? "success" : "warning" : activeDevice.state === "online" ? "success" : "warning"} /><span><strong>{activeDevice.platform === "ios" && iosSession ? `${iosSession.username}@${iosSession.sshHost}:${iosSession.sshPort}` : activeDevice.name}</strong><small>{activeDevice.platform === "ios" && iosSession ? iosSession.serverSystem ?? `SSH 会话 ${iosSession.sessionId.slice(0, 12)}…` : activeDevice.id}</small></span></div>
           <div><CheckCircle2 size={15} /><span><strong>{activeDevice.platform === "ios" ? iosRootReady ? "iOS Root SSH" : iosReady ? "iOS SSH 已验证" : "等待 SSH" : activeDevice.rooted ? "Android Root" : "标准权限"}</strong><small>{activeDevice.platform === "ios" ? "操作绑定实际 SSH 端点与当前会话" : "所有操作固定绑定此设备与当前会话"}</small></span></div>
@@ -473,10 +473,10 @@ function IosFridaWorkspace({ device, session, result, onResultChange, onOpenFile
     <Panel className="span-7" title={<><KeyRound size={17} /> iOS Frida Server 管理</>}>
       <div className="frida-profile-hero"><span className="quick-icon quick-purple"><KeyRound size={23} /></span><div><h2>越狱 iOS · SSH 会话托管</h2><p>选择你自己的 Mach-O Server，Mobius 以中性文件名上传，并自动建立仅本机可访问的 SSH 隧道。</p></div></div>
       {!verifiedRootSession ? <div className="ios-frida-connect-required">
-        <InlineNotice tone="warning" title={session?.connected ? "SSH 会话不是 Root" : "先连接并验证 SSH"}>{session?.connected ? `当前会话 UID ${session.remoteUid ?? "未知"}；启动 Server 需要经验证的 root（UID 0）会话。` : "进入“文件”页会使用默认实验机账号一键连接，也可在设置中切换私钥；USB 自动配合 iproxy。"}</InlineNotice>
+        <InlineNotice tone="warning" title={session?.connected ? "SSH 会话不是 Root" : "先连接并验证 SSH"}>{session?.connected ? `当前会话 UID ${session.remoteUid ?? "未知"}；启动 Server 需要经验证的 root（UID 0）会话。` : "进入“文件”页会使用默认实验机账号一键连接，也可在设置中切换私钥；USB 隧道会自动管理。"}</InlineNotice>
         <Button variant="primary" icon={<Link2 size={14} />} onClick={onOpenFiles}>{session?.connected ? "去文件页修改 SSH 设置" : "去文件页连接 SSH"}</Button>
       </div> : <div className="ios-frida-config form-stack">
-        <InlineNotice tone="success" title="Root SSH 已验证">{session.mode === "usb" ? `SSH + iproxy 已连接本机 ${session.sshHost}:${session.sshPort}` : `局域网 SSH 已连接 ${session.sshHost}:${session.sshPort}`}，操作仅绑定此会话。</InlineNotice>
+        <InlineNotice tone="success" title="Root SSH 已验证">{session.mode === "usb" ? `SSH + USB 隧道已连接本机 ${session.sshHost}:${session.sshPort}` : `局域网 SSH 已连接 ${session.sshHost}:${session.sshPort}`}，操作仅绑定此会话。</InlineNotice>
         <div className="frida-version-picker"><button className={profile === "16.1.4" ? "active" : ""} disabled={!!currentResult?.active || !!busy} onClick={() => setProfile("16.1.4")}><strong>16.1.4</strong><small>默认兼容槽</small></button><button className={profile === "17.17.0" ? "active" : ""} disabled={!!currentResult?.active || !!busy} onClick={() => setProfile("17.17.0")}><strong>17.17.0</strong><small>最新稳定槽</small></button><button className={profile === "custom" ? "active" : ""} disabled={!!currentResult?.active || !!busy} onClick={() => setProfile("custom")}><strong>自定义</strong><small>其他版本</small></button></div>
         {profile === "custom" && <label className="field"><span className="field-label">版本标识</span><input value={customVersion} disabled={!!currentResult?.active || !!busy} onChange={(event) => setCustomVersion(event.target.value.replace(/[^0-9A-Za-z._-]/g, "").slice(0, 40))} placeholder="例如 17.16.2" /></label>}
         <label className="field"><span className="field-label">Server 文件 · {selectedVersion}</span><div className="path-input"><input readOnly value={localPath} placeholder="从本机选择 Mach-O Server" title={localPath} /><button type="button" disabled={!!currentResult?.active || !!busy} onClick={() => void chooseServer()} title="选择文件">{busy === "choose" ? <LoaderCircle className="spin" size={14} /> : <FileUp size={14} />}</button></div><span className="field-hint">Mobius 不下载、不绑定 Server；后端会验证这是普通文件且具有 Mach-O 文件头。</span></label>

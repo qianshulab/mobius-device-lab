@@ -6,6 +6,7 @@
 - Rust：使用 `rust-toolchain.toml` 中的 stable 工具链。
 - 包管理：pnpm 10.12.1，CI 使用 `pnpm-lock.yaml` 做冻结安装。
 - Git：建议使用支持长路径和符号链接的较新版本。
+- 生成随包工具时还需要 Go 1.26.5、C 工具链、Make 与 NASM；普通安装包用户不需要这些构建依赖。
 
 首次安装：
 
@@ -25,21 +26,18 @@ pnpm run dev
 pnpm run tauri dev
 ```
 
+发行安装包已经带有目标平台的 ADB、scrcpy/Server、最小 FFmpeg、AAPT2、go-ios 与 Mobius SSH/SFTP。源码仓库不提交这些生成后二进制；第一次从源码连接真实设备前，应按“生成受控工具资源”一节为当前平台准备一次资源目录。纯浏览器预览和不触及设备的单元测试不需要它。
+
 ## macOS
 
-桌面开发只需 Xcode Command Line Tools：
+桌面开发至少需要 Xcode Command Line Tools；构建随包 FFmpeg 还需要 NASM：
 
 ```bash
 xcode-select --install
+brew install nasm
 ```
 
-安装常用外部工具的示例：
-
-```bash
-brew install android-platform-tools scrcpy ffmpeg libimobiledevice ideviceinstaller
-```
-
-调试页的 iOS 主机工具按钮需要 `ideviceinfo`、`idevicepair`、`ideviceinstaller` 和 `idevicesyslog`；屏幕预览/截图需要 `idevicescreenshot`。越狱 iOS 的 USB 隧道与 SSH 文件管理还要求 `iproxy`、`ssh` 和 `scp` 可用。macOS 通常自带 OpenSSH；如果现有 libimobiledevice 安装没有提供 `iproxy`，请按所用包管理器的拆分方式安装 libusbmuxd/usbmuxd 客户端工具。
+ADB、scrcpy/Server、FFmpeg、AAPT2、go-ios 和 Mobius SSH/SFTP 都由构建脚本准备；libimobiledevice/ideviceinstaller/libusbmuxd 只在验证兼容回退时需要，可选安装，不是发行包首次使用要求。
 
 Rust 建议通过 rustup 安装。若需要处理非越狱 iOS 调试、Developer Disk Image 或 iOS 目标本身，必须安装并至少启动一次完整 Xcode；仅有 Command Line Tools 不足以完成这些任务。
 
@@ -53,10 +51,9 @@ Rust 建议通过 rustup 安装。若需要处理非越狱 iOS 调试、Develope
 2. Rust MSVC 工具链。
 3. Node.js 22 LTS。
 4. Microsoft Edge WebView2 Runtime。Windows 10/11 通常已包含，但 CI 或精简系统仍应检查。
-5. Android SDK Platform Tools、完整的 Windows 版 scrcpy（含与客户端版本匹配的 `scrcpy-server`）和 FFmpeg。
-6. iOS 设备发现、固定诊断与截图所需的 `idevice_id`、`ideviceinfo`、`idevicepair`、`ideviceinstaller`、`idevicescreenshot`、`idevicesyslog`，USB 隧道所需的 `iproxy`，以及 Windows OpenSSH Client 中的 `ssh`、`scp`。
+5. 生成随包 FFmpeg 所需的 MSYS2 MINGW64 环境、GCC、Make、NASM、Python、tar 与 xz；发布工作流会自动配置这些组件。
 
-Android 真机可能需要设备厂商的 ADB USB 驱动。iOS USB 功能还需要 Apple Mobile Device Support；仅复制 `idevice_*` 可执行文件通常不足以建立设备连接。
+ADB、scrcpy/Server、FFmpeg、AAPT2、go-ios 和 Mobius SSH/SFTP 都由资源构建脚本准备，无需安装 Android SDK、系统 OpenSSH 或 libimobiledevice。Android 真机仍可能需要设备厂商的 ADB USB 驱动；iOS USB 功能仍需要 Apple Mobile Device Support，单独复制任何主机 CLI 都不能替代驱动和服务。
 
 发布工作流默认生成 NSIS 安装程序，因此不依赖 MSI 所需的 VBSCRIPT 可选功能。若日后启用 MSI，需要在构建主机上额外验证 WiX 与 VBSCRIPT。
 
@@ -76,13 +73,41 @@ sudo apt-get install -y \
   libssl-dev \
   libayatana-appindicator3-dev \
   librsvg2-dev \
+  nasm \
   patchelf \
   xdg-utils
 ```
 
-移动设备工具的包名取决于发行版，Debian/Ubuntu 通常可从 `adb`、完整的 `scrcpy`、`ffmpeg`、`libimobiledevice-utils`、`usbmuxd`、提供 `iproxy` 的 libusbmuxd 工具包和 `openssh-client` 开始。还需配置允许当前用户访问 Android/iOS USB 设备的 udev 规则。
+越狱 SSH 会话不需要系统 `openssh-client`。iOS USB 通道还需要正在运行的 `usbmuxd` 与允许当前用户访问设备的 udev 规则；Android USB 也需要对应 udev 权限。`libimobiledevice-utils` 与提供 `iproxy` 的 libusbmuxd 工具包只用于兼容回退测试，ADB、scrcpy、FFmpeg、AAPT2 和桌面侧 SSH/SFTP 都不再是发行安装包的系统依赖。
 
 AppImage 并不消除内核、FUSE、图形栈、WebKitGTK 或设备规则差异。发布测试至少要覆盖目标发行版的 X11 与 Wayland 会话。
+
+## 生成受控工具资源
+
+[`packaging/toolchain.lock.json`](../packaging/toolchain.lock.json) 固定每个上游归档的 URL、版本、字节数和 SHA-256，也固定 scrcpy 便携依赖、Android Platform Tools、FFmpeg、go-ios、Mobius SSH 模块与 Go 的源码/构建配置。选择当前平台目标后运行：
+
+```bash
+python3 scripts/prepare_tool_bundle.py \
+  --target macos-aarch64 \
+  --output src-tauri/resources/tools/macos-aarch64
+
+python3 scripts/verify_tool_bundle.py \
+  --target macos-aarch64 \
+  --root src-tauri/resources/tools
+```
+
+可用目标为 `windows-x86_64`、`linux-x86_64`、`macos-aarch64` 与 `macos-x86_64`。Windows 应在 MSYS2 MINGW64 shell 中使用 `python`；其他系统使用 `python3`。将示例中的目标与输出目录同步替换，脚本会拒绝不匹配或过宽的输出路径。
+
+准备过程会执行以下固定步骤：
+
+1. 按锁文件验证 HTTPS 下载的精确大小与 SHA-256，并使用带条目/容量上限的安全解包。
+2. 从 scrcpy 4.1 官方便携包提取客户端、匹配 Server、ADB 37.0.0 及 Windows 运行库；另下载精确 Google Platform Tools 37.0.0，逐字节核对 ADB/相邻 DLL 并收录对应 `NOTICE`。
+3. 从锁定源码提取 scrcpy 便携依赖的许可和内嵌第三方声明；从 Google Maven AAPT2 产物提取二进制与 `NOTICE`。
+4. 从锁定源码构建最小 LGPL FFmpeg 9.0.1，并使用 Go 1.26.5 对 go-ios 1.3.2 应用公开的 loopback/version 补丁后构建 `1.3.2-mobius.1`；macOS 默认固定 12.0 构建下限，但不抬高调用者已设的更低值。
+5. 收集许可证、Go 运行时/标准库许可、模块清单与依赖许可证，为所有随包文件生成大小、权限和 SHA-256 `manifest.json`。
+6. 验证目标架构并执行原生版本冒烟测试。macOS 发布任务之后会签名 Mach-O 文件、刷新清单并再次验证。
+
+工具只在构建/开发准备阶段联网取得，已安装应用不会运行下载器或静默替换它们。生成目录由 `.gitignore` 排除；版本、补丁、脚本、锁文件与通用第三方声明进入源码审查。
 
 ## 验证命令
 
@@ -104,31 +129,22 @@ pnpm run tauri build
 
 产物通常位于 `src-tauri/target/release/bundle/`。不同操作系统必须在对应的原生环境中构建并测试；日常开发机不需要安装另外两个系统的完整交叉编译链。
 
-## 外部工具诊断
+## 工具诊断
 
 ```bash
-adb version
-adb devices -l
-scrcpy --version
-ffmpeg -version
-idevice_id --version
-idevice_id -l
-idevice_id -n
-ideviceinfo --version
-idevicepair --version
-ideviceinstaller --version
-idevicescreenshot --version
-idevicesyslog --version
-frida --version
-aapt2 version
-apkanalyzer --version
-iproxy --help
-ssh -V
+src-tauri/resources/tools/macos-aarch64/adb version
+src-tauri/resources/tools/macos-aarch64/scrcpy --version
+src-tauri/resources/tools/macos-aarch64/ffmpeg -version
+src-tauri/resources/tools/macos-aarch64/aapt2 version
+src-tauri/resources/tools/macos-aarch64/ios version
+src-tauri/resources/tools/macos-aarch64/ios list --details
+src-tauri/resources/tools/macos-aarch64/ssh -V
+src-tauri/resources/tools/macos-aarch64/scp -V
 ```
 
-`scp` 没有统一的跨平台版本参数，请直接在 `设置 → 工具链` 查看它的可用性和实际解析路径。该页也会独立报告 `idevicepair` 与 `idevicesyslog`，不会因其他 libimobiledevice 程序存在就假定它们可用。
+上例为 Apple Silicon 开发目录；其他平台替换目标目录和 `.exe` 后缀即可。普通用户直接在 `设置 → 工具链` 查看随包工具版本、来源和解析路径更可靠。主机 Frida CLI 不属于运行依赖或健康检查项。
 
-注意：运行 `adb` 可能启动本机 ADB Server；实际启动内嵌屏幕会把与当前 scrcpy 版本匹配的 Server jar 临时推送到精确的 Android 设备，停止时尽力删除。`idevicescreenshot` 需要已信任设备与匹配的 Developer Disk Image；仅能 SSH 登录不代表 screenshotr 可用。CI 的普通单元测试不应依赖真实设备或直接执行这些诊断命令。
+注意：运行 `adb` 可能启动本机 ADB Server；实际启动内嵌屏幕会把与当前 scrcpy 版本匹配的 Server jar 临时推送到精确的 Android 设备，停止时尽力删除。go-ios 截图仍需要已信任设备与匹配的 Developer Disk Image；仅能 SSH 登录不代表 screenshotr 可用。CI 的普通单元测试不应依赖真实设备或直接执行这些诊断命令。
 
 ## 常见问题
 
@@ -138,13 +154,13 @@ ssh -V
 
 ### 桌面应用找不到命令
 
-先打开 `设置 → 工具链` 查看每项工具的解析来源和实际路径。查找顺序是：用户指定的单个工具或受控/iOS 工具目录、安装包 `resources/tools`、Android SDK 常见目录、系统 `PATH`。通过图形界面启动的应用可能继承与终端不同的环境变量，因此可以在设置页选择绝对路径并保存；保存时会验证路径和可执行权限。
+正式安装包应直接显示 ADB、scrcpy、FFmpeg、AAPT2、go-ios、SSH 与 SCP 为“随包 / 就绪”。若缺失，请先重新安装同一官方 Release，并核对杀毒软件或企业终端策略是否隔离了资源文件。源码开发则先执行上文的准备与验证脚本。
 
-当前源码只提供 `resources/tools` 的目录结构，**不附带第三方二进制，也不会自动下载**。请不要因为内嵌屏幕新增依赖而把 `scrcpy-server` 或 `ffmpeg` 直接提交到源码。发行方若要制作带工具的内部安装包，必须先完成再分发许可证、NOTICE/SBOM、上游来源、SHA-256 和平台签名审核。
+工具查找顺序是：有效的用户指定单个工具或受控/iOS 工具目录、安装包 `resources/tools`、Android SDK 常见目录、系统 `PATH`。升级遗留的显式路径若已失效，解析器可安全回到受控随包副本；不会在这种情况下悄悄改用未知的 SDK/PATH 版本。设置页保存路径时会验证绝对路径和可执行权限。
 
 ### Android 设备页没有连续画面
 
-Android 默认预览需要三项同时可用：`adb`、完整的 scrcpy 安装和 `ffmpeg`。请先在 `设置 → 工具链` 确认 `scrcpy` 与 `ffmpeg` 都是“就绪”，再核对 scrcpy 可执行文件附近是否有同一发行版的 `scrcpy-server`/`scrcpy-server.jar`。标准安装位置也可是相邻的 `share/scrcpy` 或 `lib/scrcpy` 目录；开发环境可用 `SCRCPY_SERVER_PATH` 指向经过审查且版本匹配的 Server 文件。
+Android 默认预览需要随包 `adb`、scrcpy 4.1 客户端/Server 和最小 FFmpeg 同时可用。先在 `设置 → 工具链` 确认三项均为“随包 / 就绪”；若不是，重新安装或重新生成当前目标的资源。只有开发者显式覆盖 scrcpy 时，才需要自行保证客户端与相邻 `scrcpy-server`/`scrcpy-server.jar` 版本一致；也可用 `SCRCPY_SERVER_PATH` 指向经过审查且匹配的 Server 文件。
 
 缺少任一依赖或视频链路中断时，界面会明确显示“已降级为画面采样”，并使用低频单帧 PNG；这不代表独立 scrcpy 交互窗口已启动。点击“重连”会重建受管视频会话，切换设备、暂停、离开页面或退出应用时会清理该会话。
 
@@ -154,38 +170,38 @@ Android 默认预览需要三项同时可用：`adb`、完整的 scrcpy 安装�
 
 ### iOS 列表为空
 
-确认设备已解锁并信任当前电脑，再检查 libimobiledevice、usbmuxd 或 Apple Mobile Device 驱动。部分新 iOS 版本可能要求更新这些组件。`idevice_id -l` 或 `idevice_id -n` 必须实际返回目标 UDID 才能算设备通道可用；空输出只表示未发现设备，不能当作真机功能验收。
+确认设备已解锁并信任当前电脑，再在工具链中确认随包 go-ios 就绪。Windows 检查 Apple Mobile Device 驱动/服务，Linux 检查 usbmuxd 与 udev 权限。部分新 iOS 版本还可能要求更新系统集成或挂载对应 Developer Disk Image。`ios list --details` 必须实际返回目标 UDID 才能算设备通道可用；若启用兼容回退，`idevice_id -l/-n` 的结果也可用于定位问题。空输出只表示未发现设备，不能当作真机功能验收。
 
 ### iOS 主机工具按钮报错
 
-- 先在 `设置 → 工具链` 确认对应的 `ideviceinfo`、`idevicepair`、`ideviceinstaller` 或 `idevicesyslog` 已就绪。四个按钮分别执行固定的设备信息、`validate`、`list --all` 和限时日志采样，不接受任意参数。
-- 对 USB 设备使用本地 usbmuxd 通道；对 libimobiledevice 已配对的网络设备会附加 `-n`。SSH 手工端点不是这组主机工具的替代通道。
-- `idevicesyslog` 默认采样 5 秒后由 Mobius 停止；因采样窗口到期而停止是正常结果，不是“实时日志已永久启动”。
+- 先在 `设置 → 工具链` 确认 go-ios 为“随包 / 就绪”。四个按钮分别执行固定的设备信息、只读配对状态验证、应用清单和限时日志采样，不接受任意程序名或参数。
+- 对 USB/已配对网络设备使用 go-ios；单项失败时，已配置的 libimobiledevice 程序可自动兼容回退。SSH 手工端点不是这组主机工具的替代通道。
+- 系统日志默认采样 5 秒后由 Mobius 停止；因采样窗口到期而停止是正常结果，不是“实时日志已永久启动”。
 
 ### iOS 端口隧道无法创建
 
-- USB `iproxy` 只能将本机 `127.0.0.1:主机端口` 转到指定 UDID 的设备端口，不支持设备→本机方向。
+- USB 模式优先使用精确版本的随包 go-ios，将本机 `127.0.0.1:主机端口` 转到指定 UDID 的设备端口；只有 `1.3.2-mobius.1` loopback 加固构建可走这条路径。失败时才尝试已配置的 `iproxy`，两者都不支持设备→本机方向。
 - SSH `-L` 用于本机→设备，`-R` 用于设备→本机；两者都必须复用已验证的 iOS SSH 会话，并且两端均只绑定 `127.0.0.1`。反向隧道的“本机端口”必须是已有本机服务的端口。
 - 本机→设备方向会等待本地监听就绪；SSH `-R` 只能确认受管 SSH 子进程在启动窗口内未退出，不等于已对设备端发起业务连接。
-- 关闭 SSH 会话会停止与它绑定的 `-L` / `-R` 隧道；独立 USB `iproxy` 需手动停止或等待应用退出清理。退出应用会停止所有还在登记表中的 iOS 隧道，不会扫描或终止其他工具启动的 `iproxy` / `ssh`。
+- 关闭 SSH 会话会停止与它绑定的 `-L` / `-R` 隧道；独立 USB 转发需手动停止或等待应用退出清理。退出应用会停止所有还在登记表中的 iOS 隧道，不会扫描或终止其他工具启动的 go-ios、`iproxy` 或 `ssh`。
 
 ### 越狱 iOS SSH 无法连接
 
-- USB 模式先确认设备 UDID 可被 libimobiledevice 识别，`iproxy` 可启动，且设备上的 SSH 服务正在监听所填设备端口；主机端口可留空让 Mobius 自动选择。
+- USB 模式先确认设备 UDID 可被 go-ios 识别，且设备上的 SSH 服务正在监听所填设备端口；主机端口可留空让 Mobius 自动选择。若转发回退到 `iproxy`，再核对该备用工具配置。
 - LAN 模式只接受私网、回环或链路本地的字面 IP，不接受主机名或公网目标。
-- 默认密码模式使用 root / alpine；可在“修改连接设置”中更换账号或密码。密码只传给当次 OpenSSH 子进程的 askpass 环境，不会写入本地设置或日志。
+- 默认密码模式使用 root / alpine；可在“修改连接设置”中更换账号或密码。密码由内存中的一次性回环 broker 交给随包客户端，不会进入进程参数或持久环境，也不会写入本地设置或日志。
 - 私钥模式下，确认私钥是本机普通文件、权限足够严格，且对应公钥已加入设备账号的 `authorized_keys`。
 - 允许目录不能是 `/`。目录必须存在，且登录账号需要拥有所选文件操作所需的权限。
 
 ### Frida 启动后立即退出
 
-优先核对设备 ABI、Frida 客户端/Server 版本、可执行权限和 root/Gadget 模式。16.1.4、最新稳定版和自定义项只是本地配置槽；Server 文件由用户选择，Mobius 不会替换不匹配的二进制，也不会自动获取 root。自定义设备端口启动成功后会自动创建对应的本机 ADB forward。
+优先核对设备 ABI、设备端 Server 版本、可执行权限和 root/Gadget 模式。Mobius 没有主机 Frida CLI 依赖；16.1.4、最新稳定版和自定义项只是本地配置槽，Server 文件由用户选择。Mobius 不会替换不匹配的二进制，也不会自动获取 root。自定义设备端口启动成功后会自动创建对应的本机 ADB forward。
 
 ### iOS 系统日志为空
 
 先确认当前选择的日志来源：
 
-- libimobiledevice 按钮使用主机 `idevicesyslog` 对精确 UDID 做限时采样，需要设备已配对/信任且工具链中该程序就绪。
+- 主机工具按钮优先使用随包 go-ios 对精确 UDID 做限时采样，需要设备已配对/信任；已配置的 `idevicesyslog` 只作为兼容回退。
 - SSH 诊断先在 `调试 → iOS 工具 → 越狱 SSH` 的工具检测中查看 `Apple log` 是否可用。Mobius 优先读取最近 5 分钟的统一日志，不可用时回退到 `/var/log/syslog`；两者均不存在时会在结果区明确提示。
 
 两条路径都是有界结果，不会在后台留下无限日志流。
@@ -193,6 +209,6 @@ Android 默认预览需要三项同时可用：`adb`、完整的 scrcpy 安装�
 ### iOS IPA 无法通过 SSH 安装
 
 - 先确认当前是 UID 0 的 Root SSH 会话。
-- Mobius 只识别固定路径中的 `appinst` 或 `ipainstaller`；它不会替测试机安装这些工具。USB/usbmux 设备会优先使用主机上的 `ideviceinstaller`。
+- Mobius 只识别固定路径中的 `appinst` 或 `ipainstaller`；它不会替测试机安装这些工具。USB/usbmux 设备优先使用随包 go-ios，已配置的 `ideviceinstaller` 只作为兼容回退。
 - 设备安装器的失败信息会原样返回；常见原因是签名、描述文件、信任或 AppSync 环境不兼容。
 - `.app` 导出是分析归档，不能当作 IPA 直接安装。

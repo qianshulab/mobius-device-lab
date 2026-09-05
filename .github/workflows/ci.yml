@@ -29,6 +29,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
+      - name: Validate tool-bundle scripts on Windows
+        if: runner.os == 'Windows'
+        run: |
+          python -m py_compile scripts/prepare_tool_bundle.py scripts/verify_tool_bundle.py scripts/refresh_tool_manifest.py scripts/create_third_party_sources.py
+          python -m json.tool packaging/toolchain.lock.json > $null
+
+      - name: Validate tool-bundle scripts on Unix
+        if: runner.os != 'Windows'
+        run: |
+          python3 -m py_compile scripts/prepare_tool_bundle.py scripts/verify_tool_bundle.py scripts/refresh_tool_manifest.py scripts/create_third_party_sources.py
+          python3 -m json.tool packaging/toolchain.lock.json > /dev/null
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -64,6 +76,12 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Set up Go for bundled helpers
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: tools/mobius-ssh/go.sum
+
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -74,6 +92,10 @@ jobs:
 
       - name: Build frontend
         run: pnpm run build
+
+      - name: Test bundled SSH/SFTP helper
+        working-directory: tools/mobius-ssh
+        run: go test ./...
 
       - name: Check Rust formatting
         run: cargo fmt --all --manifest-path src-tauri/Cargo.toml -- --check

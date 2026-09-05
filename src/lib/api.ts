@@ -32,21 +32,13 @@ const mockDevices: Device[] = [
 
 const mockTool = (tool: ToolHealth): ToolHealth => ({ purpose: "设备开发能力", required: false, installHint: "可在设置中选择已安装工具。", ...tool });
 const mockTools: ToolHealth[] = [
-  mockTool({ id: "adb", name: "Android Debug Bridge", version: "36.0.2", state: "ready", path: "/opt/homebrew/bin/adb", source: "path", required: true }),
-  mockTool({ id: "scrcpy", name: "scrcpy", version: "4.0", state: "ready", path: "/opt/homebrew/bin/scrcpy", source: "path" }),
-  mockTool({ id: "ffmpeg", name: "FFmpeg", version: "8.1.1", state: "ready", path: "/opt/homebrew/bin/ffmpeg", source: "path" }),
-  mockTool({ id: "frida", name: "Frida CLI", state: "warning", hint: "客户端版本未加入当前工具目录" }),
-  mockTool({ id: "aapt2", name: "Android Asset Packaging Tool", version: "35.0.0", state: "ready", path: "/Android/sdk/build-tools/35.0.0/aapt2", source: "sdk" }),
-  mockTool({ id: "apkanalyzer", name: "Android APK Analyzer", version: "35.0.0", state: "ready", path: "/Android/sdk/cmdline-tools/latest/bin/apkanalyzer", source: "sdk" }),
-  mockTool({ id: "idevice_id", name: "iOS Device Discovery", version: "1.3.0", state: "ready", path: "/opt/homebrew/bin/idevice_id", source: "path", required: true }),
-  mockTool({ id: "ideviceinfo", name: "iOS Device Info", version: "1.3.0", state: "ready", path: "/opt/homebrew/bin/ideviceinfo", source: "path", required: true }),
-  mockTool({ id: "idevicepair", name: "iOS Pairing", version: "1.3.0", state: "ready", path: "/opt/homebrew/bin/idevicepair", source: "path" }),
-  mockTool({ id: "idevicesyslog", name: "iOS Syslog Relay", version: "1.3.0", state: "ready", path: "/opt/homebrew/bin/idevicesyslog", source: "path" }),
-  mockTool({ id: "ideviceinstaller", name: "iOS Package Installer", version: "1.1.1", state: "warning", hint: "未检测到；只影响 IPA 安装" }),
-  mockTool({ id: "idevicescreenshot", name: "iOS Screenshot Service Client", version: "1.4.0", state: "ready", path: "/opt/homebrew/bin/idevicescreenshot", source: "path" }),
-  mockTool({ id: "iproxy", name: "USB Port Tunnel", version: "1.1.1", state: "ready", path: "/opt/homebrew/bin/iproxy", source: "path" }),
-  mockTool({ id: "ssh", name: "OpenSSH Client", version: "OpenSSH_9.9", state: "ready", path: "/usr/bin/ssh", source: "path", required: true }),
-  mockTool({ id: "scp", name: "OpenSSH Secure Copy", state: "ready", path: "/usr/bin/scp", source: "path", required: true }),
+  mockTool({ id: "adb", name: "Android Debug Bridge", version: "37.0.0", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/adb", source: "bundled", required: true }),
+  mockTool({ id: "scrcpy", name: "scrcpy", version: "4.1", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/scrcpy", source: "bundled", required: true }),
+  mockTool({ id: "ffmpeg", name: "FFmpeg", version: "9.0.1", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/ffmpeg", source: "bundled", required: true }),
+  mockTool({ id: "aapt2", name: "Android Asset Packaging Tool", version: "9.4.0-15978811", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/aapt2", source: "bundled", required: true }),
+  mockTool({ id: "ios", name: "go-ios", version: "1.3.2-mobius.1", state: "ready", path: "/Applications/Mobius.app/Contents/Resources/resources/tools/macos-aarch64/ios", source: "bundled", required: true }),
+  mockTool({ id: "ssh", name: "Mobius SSH Client", version: "Mobius SSH/SFTP Client 0.2.0", state: "ready", path: "/Applications/Mobius/resources/tools/macos-aarch64/ssh", source: "bundled", required: true }),
+  mockTool({ id: "scp", name: "Mobius SFTP Transfer", state: "ready", path: "/Applications/Mobius/resources/tools/macos-aarch64/scp", source: "bundled", required: true }),
 ];
 
 const mockPackage: PackageAnalysis = {

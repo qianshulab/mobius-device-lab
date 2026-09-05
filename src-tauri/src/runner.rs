@@ -231,6 +231,13 @@ fn run_process_at_inner(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if program == "adb" {
+        clear_ambient_adb_server_environment(&mut command);
+    } else if program == "ios" {
+        clear_ambient_go_ios_environment(&mut command);
+    } else if matches!(program, "ssh" | "scp") {
+        clear_ambient_ssh_auth_environment(&mut command);
+    }
     command.envs(environment.iter().map(|(key, value)| (key, value)));
     let mut child = command
         .spawn()
@@ -363,6 +370,50 @@ pub(crate) fn background_command(program: impl AsRef<OsStr>) -> Command {
     }
 }
 
+/// Keep device operations on the local ADB server selected by the bundled
+/// client. These optional variables are useful for advanced terminal use, but
+/// a GUI inherited value must not silently redirect Mobius to another host.
+pub(crate) fn clear_ambient_adb_server_environment(command: &mut Command) {
+    for name in [
+        "ADB_SERVER_SOCKET",
+        "ANDROID_ADB_SERVER_ADDRESS",
+        "ANDROID_ADB_SERVER_PORT",
+    ] {
+        command.env_remove(name);
+    }
+}
+
+/// Prevent terminal-only go-ios controls inherited by the desktop process from
+/// redirecting device discovery or starting an unmanaged background agent.
+/// Mobius selects its USB target and managed forward explicitly in arguments.
+pub(crate) fn clear_ambient_go_ios_environment(command: &mut Command) {
+    for name in [
+        "ENABLE_GO_IOS_AGENT",
+        "GO_IOS_AGENT_HOST",
+        "GO_IOS_AGENT_PORT",
+        "GO_IOS_PPROF",
+        "USBMUXD_SOCKET_ADDRESS",
+    ] {
+        command.env_remove(name);
+    }
+}
+
+/// SSH authentication is configured per verified iOS session. Ignore any
+/// askpass helper state inherited from a terminal or stale helper process.
+pub(crate) fn clear_ambient_ssh_auth_environment(command: &mut Command) {
+    for name in [
+        "MOBIUS_SSH_ASKPASS",
+        "MOBIUS_SSH_ASKPASS_PORT",
+        "MOBIUS_SSH_ASKPASS_ENDPOINT",
+        "MOBIUS_SSH_ASKPASS_TOKEN",
+        "MOBIUS_SSH_PASSWORD",
+        "SSH_ASKPASS",
+        "SSH_ASKPASS_REQUIRE",
+    ] {
+        command.env_remove(name);
+    }
+}
+
 #[derive(Default)]
 struct Capture {
     bytes: Vec<u8>,
@@ -458,6 +509,64 @@ pub(crate) fn elapsed_ms(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adb_server_redirects_are_explicitly_removed() {
+        let mut command = background_command("adb");
+        clear_ambient_adb_server_environment(&mut command);
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            removed,
+            [
+                "ADB_SERVER_SOCKET".to_string(),
+                "ANDROID_ADB_SERVER_ADDRESS".to_string(),
+                "ANDROID_ADB_SERVER_PORT".to_string(),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn go_ios_redirects_and_agent_controls_are_explicitly_removed() {
+        let mut command = background_command("ios");
+        clear_ambient_go_ios_environment(&mut command);
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            removed,
+            [
+                "ENABLE_GO_IOS_AGENT".to_string(),
+                "GO_IOS_AGENT_HOST".to_string(),
+                "GO_IOS_AGENT_PORT".to_string(),
+                "GO_IOS_PPROF".to_string(),
+                "USBMUXD_SOCKET_ADDRESS".to_string(),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn inherited_ssh_askpass_state_is_explicitly_removed() {
+        let mut command = background_command("ssh");
+        clear_ambient_ssh_auth_environment(&mut command);
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect::<std::collections::HashSet<_>>();
+        assert!(removed.contains("MOBIUS_SSH_PASSWORD"));
+        assert!(removed.contains("MOBIUS_SSH_ASKPASS_TOKEN"));
+        assert!(removed.contains("SSH_ASKPASS"));
+    }
 
     #[test]
     fn capture_is_bounded_and_reports_truncation() {

@@ -6,6 +6,7 @@ mod ios_apps;
 mod ios_diagnostics;
 mod ios_frida;
 mod ios_host_tools;
+mod ios_native;
 mod ios_ports;
 mod ios_ssh;
 mod media;

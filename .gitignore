@@ -9,6 +9,9 @@ Thumbs.db
 .serena/
 coverage/
 .pnpm-store/
+.cache/
+__pycache__/
+*.py[cod]
 *.swp
 *.tmp
 *.bak
@@ -45,11 +48,13 @@ AuthKey_*.p8
 *.exe
 *.zip
 *.tar.gz
+*.tar.xz
 /captures/
 /exports/
 /downloads/
 /artifacts/
 
-# Third-party device tools are user-provided and require a separate license review.
+# Generated third-party binaries are staged during native builds and stay out of Git.
 src-tauri/resources/tools/*
 !src-tauri/resources/tools/README.md
+!src-tauri/resources/tools/THIRD_PARTY_NOTICES.txt

@@ -1,4 +1,4 @@
-use super::{blocking_api, files::run_adb_shell};
+use super::{blocking_api, files::run_adb_shell, ios_native};
 use crate::{
     models::{
         AnalyzeMobilePackageRequest, AndroidPackageExport, ApiError, ApiResult,
@@ -57,7 +57,7 @@ pub async fn install_mobile_package(
         validation::serial(&request.serial)?;
         let source = validate_package_file(&request.path, request.platform)?;
         let path = source.to_string_lossy().into_owned();
-        let output = match request.platform {
+        let (output, message) = match request.platform {
             MobilePlatform::Android => {
                 let mut args = vec!["-s".into(), request.serial, "install".into()];
                 if request.replace {
@@ -73,21 +73,35 @@ pub async fn install_mobile_package(
                     args.push("-t".into());
                 }
                 args.push(path);
-                run_checked("adb", &args, INSTALL_TIMEOUT)?
+                (
+                    run_checked("adb", &args, INSTALL_TIMEOUT)?,
+                    "Android package installed",
+                )
             }
             MobilePlatform::Ios => {
                 require_connected_ios_udid(&request.serial)?;
-                run_checked(
+                let go_ios_error = if ios_native::available() {
+                    match ios_native::install(&request.serial, &source, INSTALL_TIMEOUT) {
+                        Ok(output) => {
+                            return Ok(output.into_operation(
+                                "iOS package submitted through go-ios (normal signing and trust checks remain active)",
+                            ));
+                        }
+                        Err(error) => Some(error),
+                    }
+                } else {
+                    None
+                };
+                let fallback = run_checked(
                     "ideviceinstaller",
                     &["-u".into(), request.serial, "install".into(), path],
                     INSTALL_TIMEOUT,
-                )?
-            }
-        };
-        let message = match request.platform {
-            MobilePlatform::Android => "Android package installed",
-            MobilePlatform::Ios => {
-                "iOS package submitted to ideviceinstaller (normal signing and trust checks remain active)"
+                )
+                .map_err(|fallback| ios_install_provider_error(go_ios_error, fallback))?;
+                (
+                    fallback,
+                    "iOS package submitted to ideviceinstaller (normal signing and trust checks remain active)",
+                )
             }
         };
         Ok(output.into_operation(message))
@@ -102,20 +116,46 @@ fn require_connected_ios_udid(serial: &str) -> Result<(), ApiError> {
             "IPA installation through ideviceinstaller requires a currently connected USB/usbmux iOS device, not a registered LAN SSH endpoint",
         ));
     }
-    let output = run_checked("idevice_id", &["-l".into()], DEVICE_TIMEOUT)?;
-    if output
-        .stdout
-        .lines()
-        .map(str::trim)
-        .any(|udid| udid == serial)
+    let go_ios_result = ios_native::available().then(|| ios_native::list_devices(DEVICE_TIMEOUT));
+    if go_ios_result
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .is_some_and(|devices| devices.iter().any(|device| device.udid == serial))
     {
-        Ok(())
-    } else {
-        Err(ApiError::new(
-            "ios_usb_device_not_found",
-            "The selected iOS UDID is not present in the current usbmux device list",
-        ))
+        return Ok(());
     }
+    if resolve_tool("idevice_id").is_ok() {
+        let output = run_checked("idevice_id", &["-l".into()], DEVICE_TIMEOUT)?;
+        if output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .any(|udid| udid == serial)
+        {
+            return Ok(());
+        }
+    }
+    Err(ApiError::new(
+        "ios_usb_device_not_found",
+        "The selected iOS UDID is not present in the current usbmux device list",
+    ))
+}
+
+fn ios_install_provider_error(primary: Option<ApiError>, fallback: ApiError) -> ApiError {
+    let Some(primary) = primary else {
+        return fallback;
+    };
+    ApiError::new(
+        "ios_install_providers_failed",
+        format!(
+            "go-ios and ideviceinstaller both failed: {}; {}",
+            primary.message, fallback.message
+        ),
+    )
+    .with_details(serde_json::json!({
+        "goIos": { "code": primary.code, "message": primary.message },
+        "ideviceinstaller": { "code": fallback.code, "message": fallback.message }
+    }))
 }
 
 #[tauri::command]

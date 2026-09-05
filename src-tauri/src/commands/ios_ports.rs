@@ -4,13 +4,18 @@ use crate::{
         ApiError, ApiResult, AppResult, CreateIosPortTunnelRequest, IosPortTunnel,
         IosPortTunnelDirection, IosPortTunnelTransport, RemoveIosPortTunnelRequest,
     },
-    runner::{background_command, resolve_tool},
+    runner::{
+        background_command, clear_ambient_go_ios_environment, resolve_tool, run_process_at,
+        ProcessOutput,
+    },
     state::{AppState, IosSshConnection, ManagedIosPortTunnel},
+    toolchain::{self, ToolSource},
     validation,
 };
 use std::{
     fmt::Write as _,
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    path::{Path, PathBuf},
     process::{Child, Stdio},
     sync::atomic::Ordering,
     thread,
@@ -23,6 +28,14 @@ const TUNNEL_START_TIMEOUT: Duration = Duration::from_secs(6);
 const REVERSE_STABILITY_WINDOW: Duration = Duration::from_millis(750);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_TUNNELS: usize = 64;
+const GO_IOS_VERSION_TIMEOUT: Duration = Duration::from_secs(3);
+const PATCHED_GO_IOS_VERSION: &str = "1.3.2-mobius.1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsbTunnelProvider {
+    BundledGoIos,
+    Iproxy,
+}
 
 struct PendingChild(Option<Child>);
 
@@ -135,7 +148,7 @@ fn create_ios_port_tunnel_inner(
     };
     let child = match request.transport {
         IosPortTunnelTransport::Iproxy => {
-            spawn_iproxy_tunnel(&request.udid, host_port, request.device_port)?
+            spawn_usb_tunnel(&request.udid, host_port, request.device_port)?
         }
         IosPortTunnelTransport::Ssh => spawn_ssh_tunnel(
             connection.as_ref().expect("validated SSH connection"),
@@ -145,11 +158,20 @@ fn create_ios_port_tunnel_inner(
         )?,
     };
     let mut pending = PendingChild::new(child);
-    match request.direction {
-        IosPortTunnelDirection::HostToDevice => {
+    match (request.transport, request.direction) {
+        // spawn_usb_tunnel() has already proved that the loopback listener is
+        // ready. Connecting again here would send a second empty connection to
+        // an arbitrary device service.
+        (IosPortTunnelTransport::Iproxy, IosPortTunnelDirection::HostToDevice) => {}
+        (IosPortTunnelTransport::Ssh, IosPortTunnelDirection::HostToDevice) => {
             wait_for_local_listener(pending.child_mut()?, host_port)?
         }
-        IosPortTunnelDirection::DeviceToHost => wait_for_reverse_forward(pending.child_mut()?)?,
+        (IosPortTunnelTransport::Ssh, IosPortTunnelDirection::DeviceToHost) => {
+            wait_for_reverse_forward(pending.child_mut()?)?
+        }
+        (IosPortTunnelTransport::Iproxy, IosPortTunnelDirection::DeviceToHost) => {
+            unreachable!("validated USB tunnel direction")
+        }
     }
     require_running(state)?;
     if let Some(session_id) = request.session_id.as_deref() {
@@ -292,6 +314,119 @@ fn spawn_iproxy_tunnel(udid: &str, host_port: u16, device_port: u16) -> AppResul
                 format!("Unable to start the managed USB port tunnel: {error}"),
             )
         })
+}
+
+pub(crate) fn spawn_usb_tunnel(udid: &str, host_port: u16, device_port: u16) -> AppResult<Child> {
+    let mut go_ios_error = None;
+    if let Some(executable) = verified_bundled_go_ios_forward() {
+        match spawn_go_ios_tunnel(&executable, udid, host_port, device_port) {
+            Ok(mut child) => match wait_for_local_listener(&mut child, host_port) {
+                Ok(()) => return Ok(child),
+                Err(error) => {
+                    ios_ssh::stop_child(&mut child);
+                    go_ios_error = Some(error);
+                }
+            },
+            Err(error) => go_ios_error = Some(error),
+        }
+    }
+
+    let fallback = match spawn_iproxy_tunnel(udid, host_port, device_port) {
+        Ok(mut child) => match wait_for_local_listener(&mut child, host_port) {
+            Ok(()) => return Ok(child),
+            Err(error) => {
+                ios_ssh::stop_child(&mut child);
+                error
+            }
+        },
+        Err(error) => error,
+    };
+    let Some(primary) = go_ios_error else {
+        return Err(fallback);
+    };
+    Err(ApiError::new(
+        "ios_usb_tunnel_providers_failed",
+        format!(
+            "The bundled go-ios tunnel and iproxy fallback both failed: {}; {}",
+            primary.message, fallback.message
+        ),
+    )
+    .with_details(serde_json::json!({
+        "goIos": { "code": primary.code, "message": primary.message },
+        "iproxy": { "code": fallback.code, "message": fallback.message }
+    })))
+}
+
+fn verified_bundled_go_ios_forward() -> Option<PathBuf> {
+    let resolved = toolchain::resolve_bundled_tool("ios").ok()?;
+    if resolved.source != ToolSource::Bundled {
+        return None;
+    }
+    let output = run_process_at(
+        "ios",
+        &resolved.path,
+        &["version".into()],
+        GO_IOS_VERSION_TIMEOUT,
+        &[],
+    )
+    .ok()?;
+    (select_usb_tunnel_provider(resolved.source, &output) == UsbTunnelProvider::BundledGoIos)
+        .then_some(resolved.path)
+}
+
+fn select_usb_tunnel_provider(source: ToolSource, output: &ProcessOutput) -> UsbTunnelProvider {
+    if verified_go_ios_version(source, output) {
+        UsbTunnelProvider::BundledGoIos
+    } else {
+        UsbTunnelProvider::Iproxy
+    }
+}
+
+fn verified_go_ios_version(source: ToolSource, output: &ProcessOutput) -> bool {
+    source == ToolSource::Bundled
+        && !output.timed_out
+        && !output.truncated
+        && output.exit_code == Some(0)
+        && serde_json::from_str::<serde_json::Value>(output.stdout.trim())
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("version")?
+                    .as_str()
+                    .map(|version| version == PATCHED_GO_IOS_VERSION)
+            })
+            .unwrap_or(false)
+}
+
+fn spawn_go_ios_tunnel(
+    executable: &Path,
+    udid: &str,
+    host_port: u16,
+    device_port: u16,
+) -> AppResult<Child> {
+    let mut command = background_command(executable);
+    clear_ambient_go_ios_environment(&mut command);
+    command
+        .args(go_ios_forward_args(udid, host_port, device_port))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            ApiError::new(
+                "go_ios_tunnel_spawn_failed",
+                format!("Unable to start the managed go-ios USB tunnel: {error}"),
+            )
+        })
+}
+
+fn go_ios_forward_args(udid: &str, host_port: u16, device_port: u16) -> Vec<String> {
+    vec![
+        "forward".into(),
+        host_port.to_string(),
+        device_port.to_string(),
+        format!("--udid={udid}"),
+    ]
 }
 
 fn iproxy_args(udid: &str, host_port: u16, device_port: u16) -> Vec<String> {
@@ -585,6 +720,60 @@ mod tests {
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn go_ios_forward_arguments_keep_host_and_device_port_order() {
+        assert_eq!(
+            go_ios_forward_args("device-1", 8_080, 9_090),
+            vec!["forward", "8080", "9090", "--udid=device-1"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn go_ios_forward_requires_exact_patched_bundled_version() {
+        let output = ProcessOutput {
+            program: "ios".into(),
+            exit_code: Some(0),
+            stdout: format!("{{\"version\":\"{PATCHED_GO_IOS_VERSION}\"}}\n"),
+            stderr: String::new(),
+            timed_out: false,
+            truncated: false,
+            duration_ms: 1,
+        };
+        assert_eq!(
+            select_usb_tunnel_provider(ToolSource::Bundled, &output),
+            UsbTunnelProvider::BundledGoIos
+        );
+        assert_eq!(
+            select_usb_tunnel_provider(ToolSource::Configured, &output),
+            UsbTunnelProvider::Iproxy
+        );
+        assert_eq!(
+            select_usb_tunnel_provider(ToolSource::Path, &output),
+            UsbTunnelProvider::Iproxy
+        );
+
+        let upstream = ProcessOutput {
+            stdout: "{\"version\":\"1.3.2\"}\n".into(),
+            ..output.clone()
+        };
+        assert!(!verified_go_ios_version(ToolSource::Bundled, &upstream));
+
+        let timed_out = ProcessOutput {
+            timed_out: true,
+            ..output.clone()
+        };
+        assert!(!verified_go_ios_version(ToolSource::Bundled, &timed_out));
+
+        let wrapped = ProcessOutput {
+            stdout: format!("unexpected\n{{\"version\":\"{PATCHED_GO_IOS_VERSION}\"}}\n"),
+            ..output
+        };
+        assert!(!verified_go_ios_version(ToolSource::Bundled, &wrapped));
     }
 
     #[test]

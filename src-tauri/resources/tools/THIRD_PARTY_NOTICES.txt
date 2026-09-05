@@ -1,0 +1,169 @@
+Mobius Device Lab - Bundled Toolchain Notices
+=============================================
+
+Mobius desktop packages contain command-line tools used only for local,
+user-initiated Android and iOS development and device-management operations.
+Exact versions, original download locations, archive hashes, build settings,
+linkage, and per-file hashes are recorded in packaging/toolchain.lock.json and
+in the manifest.json shipped beside each platform bundle. The exact license
+texts named below are shipped in that bundle's licenses/ directory.
+
+scrcpy 4.1 and scrcpy-server
+----------------------------
+Copyright (C) 2018 Genymobile
+License: Apache License 2.0
+Project: https://github.com/Genymobile/scrcpy
+
+Mobius copies the unmodified client, matching Server, and required runtime
+files from the official target-specific scrcpy 4.1 portable archive. Its source
+and upstream build-control scripts are in the companion source archive.
+
+Android Debug Bridge (ADB) 37.0.0
+---------------------------------
+Copyright (C) The Android Open Source Project and other contributors
+License: Apache License 2.0 and the additional licenses in Google's NOTICE
+Source: https://android.googlesource.com/platform/packages/modules/adb/
+
+For each target, Mobius downloads the exact Google Platform Tools 37.0.0
+archive and requires the ADB executable (and Windows ADB DLLs) from scrcpy's
+portable archive to match it byte for byte. The matching target-specific
+Platform Tools NOTICE is shipped as android-platform-tools-NOTICE.txt.
+
+scrcpy portable FFmpeg 8.1.2
+----------------------------
+Copyright (c) FFmpeg developers
+License: GNU Lesser General Public License 2.1 or later
+Project: https://ffmpeg.org/
+
+Windows ships FFmpeg as replaceable adjacent DLLs. The Linux and macOS scrcpy
+clients statically link FFmpeg. Complete FFmpeg 8.1.2 source, its LGPL texts,
+the controlling scrcpy scripts, and relinking instructions are included in the
+companion source archive.
+
+scrcpy portable SDL 3.4.12
+--------------------------
+Copyright (C) SDL contributors
+License: zlib license, with separately licensed embedded portions
+Project: https://github.com/libsdl-org/SDL
+
+Windows ships SDL as a replaceable adjacent DLL. The Linux and macOS scrcpy
+clients statically link SDL. The bundle conservatively carries SDL's root
+license and the original notices or source headers for HIDAPI, yuv2rgb,
+imKStoUCS, EDID parsing, XSettings, stb_image, and Khronos EGL/Vulkan headers.
+Complete SDL 3.4.12 source is in the companion source archive.
+
+scrcpy portable libusb 1.0.30
+-----------------------------
+Copyright (C) libusb contributors
+License: GNU Lesser General Public License 2.1 or later
+Project: https://github.com/libusb/libusb
+
+Windows ships libusb as a replaceable adjacent DLL. Linux and macOS scrcpy
+clients statically link libusb. Complete source, license text, upstream build
+scripts, and relinking guidance accompany each release.
+
+scrcpy portable dav1d 1.5.3
+---------------------------
+Copyright (c) 2018-2025, VideoLAN and dav1d authors
+License: BSD 2-Clause; see also the upstream PATENTS file
+Project: https://code.videolan.org/videolan/dav1d
+
+dav1d is linked statically into scrcpy's FFmpeg dependency on every target.
+Its exact source, COPYING, and PATENTS files accompany each release.
+
+scrcpy portable zlib
+--------------------
+Copyright (C) Jean-loup Gailly and Mark Adler
+License: zlib license
+Project: https://zlib.net/
+
+The official portable builds use zlib 1.3.1 on Windows, zlib 1.2.11 on Linux,
+zlib 1.3.2 on macOS arm64, and the operating-system libz on macOS x86_64.
+Mobius ships the applicable target license text and includes every distributed
+variant's exact source in the companion source archive.
+
+MinGW-w64 runtime 11.0.1 (Windows scrcpy portable files)
+--------------------------------------------------------
+Copyright (C) the MinGW-w64 project and other contributors
+License: various permissive licenses; see COPYING.MinGW-w64-runtime.txt
+Project: https://www.mingw-w64.org/
+
+Parts of the MinGW-w64 runtime are statically linked into the official Windows
+scrcpy/SDL portable files. The full upstream runtime notice is shipped in the
+Windows bundle, and the exact MinGW-w64 11.0.1 source accompanies the release.
+
+Android Asset Packaging Tool 2 (AAPT2) 9.4.0-15978811
+------------------------------------------------------
+Copyright (C) The Android Open Source Project and contributors
+License: Apache License 2.0, with additional licenses in the upstream NOTICE
+Source: https://android.googlesource.com/platform/frameworks/base/+/master/tools/aapt2/
+
+The complete NOTICE from the exact Google Maven artifact is shipped under
+licenses/.
+
+go-ios 1.3.2-mobius.1
+---------------------
+Copyright (c) Daniel Paulus and contributors
+License: MIT
+Project: https://github.com/danielpaulus/go-ios
+
+Mobius applies a small, published patch that identifies the build and binds
+local forwarding and optional screenshot streaming to 127.0.0.1 instead of all
+host interfaces. The patch, exact upstream source, module list, build metadata,
+and dependency license files are included in the corresponding source package
+or platform bundle.
+
+Go 1.26.5 runtime and standard library
+--------------------------------------
+Copyright (c) 2009 The Go Authors
+License: BSD 3-Clause
+Project: https://go.dev/
+
+go-ios and the Mobius SSH/SFTP helper are statically linked with the Go runtime
+and standard library. The exact Go LICENSE is shipped in every platform bundle;
+the locked Go 1.26.5 source is included in the companion source archive for
+conservative reproducibility.
+
+Mobius SSH/SFTP helper dependencies
+-----------------------------------
+The first-party Mobius helper provides only the SSH command, single-file SFTP,
+and loopback port-forwarding operations generated by this application. It uses:
+
+- golang.org/x/crypto v0.56.0 (BSD 3-Clause)
+- github.com/pkg/sftp v1.13.11 (BSD 2-Clause)
+- github.com/kr/fs v0.1.0 (BSD 3-Clause)
+- golang.org/x/sys v0.47.0 on Windows (BSD 3-Clause)
+
+Each applicable license and the Go project's accompanying PATENTS grant are
+shipped in the target bundle. Exact source archives, Go checksums, first-party
+helper source/tests, and target linkage are included in the companion source
+archive.
+
+FFmpeg 9.0.1 (minimal Mobius command build)
+-------------------------------------------
+Copyright (c) FFmpeg developers
+License: GNU Lesser General Public License 2.1 or later
+Project: https://ffmpeg.org/
+
+This separate command build does not enable GPL or nonfree components, network,
+or external codecs. It contains only the FFmpeg command and the H.264-to-MJPEG
+pipeline components needed for the embedded Android screen. Exact source,
+license texts, and build options are distributed with each release.
+
+Source and relinking material
+-----------------------------
+Every Release includes Mobius-Device-Lab_<version>_third-party-sources.tar.xz.
+It contains the complete, hash-locked upstream sources listed above, the exact
+license and NOTICE files, the go-ios patch, scrcpy's upstream build scripts,
+Mobius preparation/verification scripts, and packaging/SCRCPY_REBUILD.md.
+SOURCE_INDEX.json records target linkage and SHA256SUMS.txt covers every other
+file in the archive.
+
+Platform requirements not contained in the application
+--------------------------------------------------------
+Windows still requires Apple's Mobile Device USB driver/service for USB iOS
+access. Linux requires working USB permissions and usbmuxd for USB iOS access.
+Device trust, the jailbreak SSH server, AppSync/device-side package installers,
+and Developer Disk Images remain properties of the user's authorized test
+device or operating system. The desktop-side SSH/SFTP client is included in
+every target package and does not depend on an operating-system OpenSSH client.

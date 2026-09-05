@@ -4,7 +4,10 @@ use crate::{
         AndroidScreenStreamRequest, AndroidScreenStreamResult, ApiError, ApiResult, AppResult,
         OperationResult, ScrcpyRequest, StopAndroidScreenStreamRequest,
     },
-    runner::{background_command, resolve_tool, run_process_at, run_process_at_with_env},
+    runner::{
+        background_command, clear_ambient_adb_server_environment, resolve_tool, run_process_at,
+        run_process_at_with_env,
+    },
     state::{AppState, ManagedAndroidScreenStream},
     validation,
 };
@@ -71,7 +74,8 @@ pub async fn launch_scrcpy(request: ScrcpyRequest) -> ApiResult<OperationResult>
 
         let executable = resolve_tool("scrcpy")?;
         let adb = resolve_tool("adb")?;
-        let mut child = scrcpy_client_command(&executable, &adb)
+        let (_, server) = resolve_matching_scrcpy_server(&executable, &adb)?;
+        let mut child = scrcpy_client_command(&executable, &adb, &server)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -329,7 +333,9 @@ fn start_screen_stream(
         ));
     }
 
-    let mut server = match background_command(&adb)
+    let mut server_command = background_command(&adb);
+    clear_ambient_adb_server_environment(&mut server_command);
+    let mut server = match server_command
         .args([
             "-s",
             request.serial.as_str(),
@@ -825,7 +831,7 @@ fn allowed_stream_origin(origin: &str) -> bool {
 }
 
 fn resolve_matching_scrcpy_server(scrcpy: &Path, adb: &Path) -> AppResult<(String, PathBuf)> {
-    let environment = scrcpy_environment(adb);
+    let environment = scrcpy_adb_environment(adb);
     let version_output = run_process_at_with_env(
         "scrcpy",
         scrcpy,
@@ -849,16 +855,15 @@ fn resolve_matching_scrcpy_server(scrcpy: &Path, adb: &Path) -> AppResult<(Strin
             "The scrcpy executable has no parent directory",
         )
     })?;
-    let mut candidates = Vec::new();
-    if let Some(configured) = std::env::var_os("SCRCPY_SERVER_PATH") {
-        candidates.push(PathBuf::from(configured));
-    }
-    candidates.extend([
+    let mut candidates = vec![
         parent.join("scrcpy-server"),
         parent.join("scrcpy-server.jar"),
         parent.join("../share/scrcpy/scrcpy-server"),
         parent.join("../lib/scrcpy/scrcpy-server"),
-    ]);
+    ];
+    if let Some(configured) = std::env::var_os("SCRCPY_SERVER_PATH") {
+        candidates.push(PathBuf::from(configured));
+    }
     for candidate in candidates {
         let Ok(candidate) = fs::canonicalize(candidate) else {
             continue;
@@ -876,13 +881,15 @@ fn resolve_matching_scrcpy_server(scrcpy: &Path, adb: &Path) -> AppResult<(Strin
     ))
 }
 
-fn scrcpy_client_command(scrcpy: &Path, adb: &Path) -> std::process::Command {
+fn scrcpy_client_command(scrcpy: &Path, adb: &Path, server: &Path) -> std::process::Command {
     let mut command = background_command(scrcpy);
-    command.envs(scrcpy_environment(adb));
+    clear_ambient_adb_server_environment(&mut command);
+    command.envs(scrcpy_adb_environment(adb));
+    command.env("SCRCPY_SERVER_PATH", server);
     command
 }
 
-fn scrcpy_environment(adb: &Path) -> [(OsString, OsString); 1] {
+fn scrcpy_adb_environment(adb: &Path) -> [(OsString, OsString); 1] {
     [(OsString::from("ADB"), adb.as_os_str().to_os_string())]
 }
 
@@ -1215,17 +1222,19 @@ mod tests {
     #[test]
     fn scrcpy_command_receives_the_resolved_adb_path() {
         #[cfg(windows)]
-        let (scrcpy, adb) = (
+        let (scrcpy, adb, server) = (
             Path::new(r"C:\managed tools\scrcpy.exe"),
             Path::new(r"C:\Android SDK\platform-tools\adb.exe"),
+            Path::new(r"C:\managed tools\scrcpy-server"),
         );
         #[cfg(not(windows))]
-        let (scrcpy, adb) = (
+        let (scrcpy, adb, server) = (
             Path::new("/managed tools/scrcpy"),
             Path::new("/Android SDK/platform-tools/adb"),
+            Path::new("/managed tools/scrcpy-server"),
         );
 
-        let command = scrcpy_client_command(scrcpy, adb);
+        let command = scrcpy_client_command(scrcpy, adb, server);
         assert_eq!(command.get_program(), scrcpy.as_os_str());
         assert_eq!(
             command
@@ -1233,6 +1242,13 @@ mod tests {
                 .find(|(name, _)| *name == std::ffi::OsStr::new("ADB"))
                 .and_then(|(_, value)| value),
             Some(adb.as_os_str())
+        );
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == std::ffi::OsStr::new("SCRCPY_SERVER_PATH"))
+                .and_then(|(_, value)| value),
+            Some(server.as_os_str())
         );
     }
 

@@ -464,7 +464,7 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
     const sessionId = iosSession.sessionId;
     try {
       await api.stopIosSshSession(sessionId);
-      notify("success", "iOS SSH 会话已断开", "关联的 USB iproxy 隧道也已停止。");
+      notify("success", "iOS SSH 会话已断开", "关联的 USB 隧道也已停止。");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setFileError(message);
@@ -515,7 +515,7 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
           <div className="ios-connect-card">
             <div className="ios-connect-hero">
               <span className={`quick-icon ${iosMode === "usb" ? "quick-green" : "quick-blue"}`}>{iosMode === "usb" ? <Cable size={20} /> : <NetworkIcon size={20} />}</span>
-              <div><strong>{iosMode === "usb" ? "USB + iproxy" : "局域网 SSH"}</strong><small>{iosMode === "usb" ? "自动创建仅本机可访问的 SSH 隧道" : "使用已登记的私网 SSH 地址"}</small></div>
+              <div><strong>{iosMode === "usb" ? "USB 直连" : "局域网 SSH"}</strong><small>{iosMode === "usb" ? "自动创建仅本机可访问的 SSH 隧道" : "使用已登记的私网 SSH 地址"}</small></div>
             </div>
             <div className="ios-connect-summary" aria-label="iOS SSH 连接摘要">
               <div><span>登录目标</span><strong>{iosUsername.trim() || "root"}@{iosMode === "usb" ? "当前 USB 设备" : iosHost.trim() || "未设置地址"}</strong></div>
@@ -532,21 +532,21 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
 
           {iosSettingsOpen && <div className="form-stack ios-ssh-form ios-ssh-advanced">
             <InlineNotice tone="info" title="密码只驻留当前运行内存">默认使用 root / alpine；密码不会写入本地设置、日志或命令行。保存设置时只记住认证方式。</InlineNotice>
-            <Tabs value={iosMode} onChange={setIosMode} options={[{ id: "usb", label: "USB + iproxy（推荐）" }, { id: "lan", label: "局域网 SSH" }]} />
+            <Tabs value={iosMode} onChange={setIosMode} options={[{ id: "usb", label: "USB 直连（推荐）" }, { id: "lan", label: "局域网 SSH" }]} />
             {iosMode === "lan" && <Field label="设备私网地址" hint="手工登记的 Wi-Fi 设备会自动带入地址；仅接受私网地址。"><input value={iosHost} onChange={(event) => setIosHost(event.target.value)} placeholder="192.168.1.42" /></Field>}
             <div className="field-row"><Field label="SSH 用户"><input value={iosUsername} onChange={(event) => setIosUsername(event.target.value)} placeholder="root" autoComplete="off" /></Field><Field label="设备 SSH 端口"><input value={iosDevicePort} onChange={(event) => setIosDevicePort(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" /></Field></div>
-            {iosMode === "usb" && <Field label="本机隧道端口（可留空）" hint="留空时自动选择空闲端口；iproxy 只绑定 127.0.0.1。"><input value={iosHostPort} onChange={(event) => setIosHostPort(event.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="自动" inputMode="numeric" /></Field>}
+            {iosMode === "usb" && <Field label="本机隧道端口（可留空）" hint="留空时自动选择空闲端口；只绑定 127.0.0.1。"><input value={iosHostPort} onChange={(event) => setIosHostPort(event.target.value.replace(/\D/g, "").slice(0, 5))} placeholder="自动" inputMode="numeric" /></Field>}
             <div className="field"><span className="field-label">认证方式</span><Tabs value={iosAuthMode} onChange={setIosAuthMode} options={[{ id: "password", label: "账号密码（默认）" }, { id: "privateKey", label: "SSH 私钥" }]} /></div>
             {iosAuthMode === "password"
               ? <Field label="SSH 密码" hint="默认 alpine；仅驻留当前运行内存，切换设备时恢复默认值。"><input type="password" value={iosPassword} onChange={(event) => setIosPassword(event.target.value)} autoComplete="off" /></Field>
-              : <Field label="SSH 私钥" hint="使用 OpenSSH 私钥与无交互 BatchMode。"><div className="path-input"><input value={iosPrivateKey} onChange={(event) => setIosPrivateKey(event.target.value)} placeholder="首次连接时可直接从主按钮选择" /><button type="button" onClick={() => void selectIosPrivateKey()}>选择</button></div></Field>}
+              : <Field label="SSH 私钥" hint="使用明确选择的未加密 OpenSSH 私钥。"><div className="path-input"><input value={iosPrivateKey} onChange={(event) => setIosPrivateKey(event.target.value)} placeholder="首次连接时可直接从主按钮选择" /><button type="button" onClick={() => void selectIosPrivateKey()}>选择</button></div></Field>}
             <Field label="允许访问的根目录" hint="多个目录用逗号分隔；不能删除根目录本身，也不能经符号链接越界。"><input value={iosAllowedRoots} onChange={(event) => setIosAllowedRoots(event.target.value)} placeholder="/var/mobile" /></Field>
             <div className="ios-advanced-actions"><Button icon={<Save size={15} />} onClick={saveIosPreset}>保存此设备设置</Button><Button variant="primary" icon={iosConnecting ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />} disabled={iosConnecting} onClick={() => void connectIosFileSystem()}>{iosConnecting ? "正在连接…" : "连接并打开文件"}</Button></div>
           </div>
           }
         </Panel>
         <Panel className="span-5" title="连接方式与边界">
-          <div className="ios-ssh-paths"><div><span className="quick-icon quick-green"><Cable size={19} /></span><span><strong>USB + iproxy</strong><small>UDID 固定到当前设备，自动管理回环隧道；无需把 SSH 暴露到 Wi-Fi。</small></span></div><div><span className="quick-icon quick-blue"><NetworkIcon size={19} /></span><span><strong>局域网 SSH</strong><small>只允许明确填写的私网目标；适合没有 USB 链路的实验设备。</small></span></div><div><span className="quick-icon quick-purple"><ShieldCheck size={19} /></span><span><strong>路径白名单</strong><small>列表、传输、新建和删除都限制到本次会话声明的根目录。</small></span></div></div>
+          <div className="ios-ssh-paths"><div><span className="quick-icon quick-green"><Cable size={19} /></span><span><strong>USB 直连隧道</strong><small>UDID 固定到当前设备，自动管理回环隧道；无需把 SSH 暴露到 Wi-Fi。</small></span></div><div><span className="quick-icon quick-blue"><NetworkIcon size={19} /></span><span><strong>局域网 SSH</strong><small>只允许明确填写的私网目标；适合没有 USB 链路的实验设备。</small></span></div><div><span className="quick-icon quick-purple"><ShieldCheck size={19} /></span><span><strong>路径白名单</strong><small>列表、传输、新建和删除都限制到本次会话声明的根目录。</small></span></div></div>
           <div className="security-footnote"><ShieldAlert size={15} /><span>首次连接会使用 accept-new 记录主机密钥；密钥变化时 SSH 会拒绝连接。</span></div>
         </Panel>
       </div>
@@ -588,7 +588,7 @@ export default function FilesPage({ activeDevice, iosSession, onIosSessionChange
           ))}
           {!loading && !filtered.length && <EmptyState icon={<FolderOpen size={27} />} title={search ? "没有匹配项目" : "目录为空"} detail={search ? "清除筛选词后查看全部项目。" : "可以上传文件或在此创建新目录。"} />}
         </div>
-        <footer className="file-status"><span><FolderLock size={14} /> 当前权限：{activeDevice.platform === "ios" ? `SSH UID ${iosSession?.remoteUid ?? "未知"} · 路径白名单` : activeDevice.rooted ? "Root（写入仍需确认）" : "ADB Shell"}</span><span>{activeDevice.platform === "ios" && iosSession?.tunnel ? `iproxy 127.0.0.1:${iosSession.tunnel.hostPort} → ${iosSession.tunnel.devicePort}` : "路径不会自动递归扫描"}</span></footer>
+        <footer className="file-status"><span><FolderLock size={14} /> 当前权限：{activeDevice.platform === "ios" ? `SSH UID ${iosSession?.remoteUid ?? "未知"} · 路径白名单` : activeDevice.rooted ? "Root（写入仍需确认）" : "ADB Shell"}</span><span>{activeDevice.platform === "ios" && iosSession?.tunnel ? `USB 127.0.0.1:${iosSession.tunnel.hostPort} → ${iosSession.tunnel.devicePort}` : "路径不会自动递归扫描"}</span></footer>
       </Panel>
 
       {transfer && <Modal title={transfer === "upload" ? "上传到设备" : "从设备下载"} subtitle={`目标设备：${activeDevice.name}`} onClose={() => setTransfer(null)} footer={<><Button onClick={() => setTransfer(null)}>取消</Button><Button variant="primary" disabled={loading || !localPath.trim() || !remotePath.trim()} onClick={startTransfer}>{loading ? "传输中…" : transfer === "upload" ? "开始上传" : "开始下载"}</Button></>}>

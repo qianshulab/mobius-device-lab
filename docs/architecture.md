@@ -10,9 +10,9 @@ React / TypeScript UI
         ▼
 Rust 命令边界 ── 输入校验 ── 会话资源归属
         │
-        ├── 包分析: ZIP / plist / Mach-O / aapt2 / apkanalyzer
-        ├── Android: adb / scrcpy + scrcpy-server / FFmpeg / 用户提供的 frida-server
-        └── iOS: libimobiledevice / ideviceinstaller / idevicesyslog / iproxy / OpenSSH
+        ├── 包分析: ZIP / plist / Mach-O / 随包 AAPT2 / apkanalyzer 回退
+        ├── Android: 随包 adb / scrcpy + scrcpy-server / 最小 FFmpeg / 用户提供的 frida-server
+        └── iOS: 随包 go-ios / 随包 Mobius SSH/SFTP / libimobiledevice 回退
 ```
 
 ## 目录职责
@@ -21,12 +21,16 @@ Rust 命令边界 ── 输入校验 ── 会话资源归属
 | --- | --- |
 | `src/` | 页面、组件、前端类型、Tauri 调用适配与浏览器预览数据 |
 | `src-tauri/src/commands/` | 面向界面的窄命令接口；每项操作都有明确输入结构 |
-| `src-tauri/src/commands/ios_host_tools.rs` | 将 `ideviceinfo` / `idevicepair validate` / `ideviceinstaller list --all` / 限时 `idevicesyslog` 约束为四个固定主机诊断 |
-| `src-tauri/src/commands/ios_ports.rs` | 创建、列出和停止 USB `iproxy` 与 SSH `-L` / `-R` 回环隧道，并管理其子进程归属 |
+| `src-tauri/src/commands/ios_native.rs` | 把 go-ios 的设备发现、信息、安装、截图与固定诊断收敛为结构化内部适配器 |
+| `src-tauri/src/commands/ios_host_tools.rs` | 将 go-ios 信息/应用/日志及可选 libimobiledevice 回退约束为四个固定主机诊断 |
+| `src-tauri/src/commands/ios_ports.rs` | 创建、列出和停止 USB go-ios/`iproxy` 与 SSH `-L` / `-R` 回环隧道，并管理其子进程归属 |
 | `src-tauri/src/validation.rs` | 设备标识、地址、端口、远端路径和本地路径校验 |
 | `src-tauri/src/runner.rs` | 外部进程启动、超时、输出截断、错误归一化和敏感值替换 |
 | `src-tauri/src/state.rs` | 当前会话创建的内嵌屏幕流与受管录屏、代理整组快照、Android 映射、Frida 进程、iOS SSH 会话与受管 iOS 隧道子进程归属信息 |
 | `src-tauri/src/toolchain.rs` | 工具链配置持久化、来源优先级、可执行文件校验与跨平台解析 |
+| `packaging/toolchain.lock.json` | 锁定随包工具版本、上游 HTTPS 来源、精确大小、SHA-256 与源码构建参数 |
+| `packaging/patches/`、`scripts/` | 保存 go-ios 的公开加固补丁，以及安全下载、构建、逐文件清单验证和第三方源码归档脚本 |
+| `src-tauri/resources/tools/` | 构建时生成的目标平台工具、运行库、`manifest.json`、许可证、NOTICE、补丁和构建记录 |
 | `src-tauri/capabilities/` | Tauri 窗口可调用能力的最小授权集合 |
 | `.github/workflows/` | 三平台持续集成与原生安装包发布矩阵 |
 
@@ -57,15 +61,15 @@ Rust 命令边界 ── 输入校验 ── 会话资源归属
 
 ### iOS
 
-- 设备与应用：通过 `idevice_id -l/-n` 合并枚举 USB 与已配对网络设备（USB 优先去重），通过 `ideviceinfo` 读取属性；离线解析 IPA；USB 默认调用 `ideviceinstaller`，Root SSH 会话可探测测试机已有的 `appinst` / `ipainstaller`。
-- 主机工具：调试页的 libimobiledevice 分组只向后端发送 `deviceInfo / pairing / apps / syslog` 枚举。后端分别构造 `ideviceinfo`、`idevicepair validate`、`ideviceinstaller list --all` 和 `idevicesyslog --no-colors` 的固定参数，绑定精确 UDID；网络配对通道附加 `-n`。日志以默认 5 秒窗口采样，所有输出均清理控制字符并限长。
+- 设备与应用：随包 go-ios 使用 `list --details` 合并枚举 USB 与已配对网络设备（USB 优先去重），使用 `info` 读取属性；离线解析 IPA；USB 默认使用 `install`，Root SSH 会话可探测测试机已有的 `appinst` / `ipainstaller`。单项失败时，可回退到用户已有的 `idevice_id`、`ideviceinfo` 或 `ideviceinstaller`。
+- 主机工具：调试页只向后端发送 `deviceInfo / pairing / apps / syslog` 枚举。后端优先构造绑定精确 UDID 的 go-ios `info`、`apps --all` 和 `syslog`；配对状态采用只读信息连接验证，不触发重新配对。日志以默认 5 秒窗口采样，所有输出均清理控制字符并限长。已配置的 libimobiledevice 工具是兼容回退，而不是默认依赖。
 - SSH 应用工作流：从固定 iOS 应用目录读取有界 `Info.plist` 元数据；安装临时文件位于会话首个允许根的 `.mobius-runtime`；导出仅生成开发分析 `.app` 归档，不重建 IPA。
-- SSH 文件：USB 模式由 `iproxy` 将设备 SSH 端口映射到主机 `127.0.0.1`；LAN 模式只接受私网、回环或链路本地字面 IP。密码模式使用当前可执行文件作为 `SSH_ASKPASS` helper，私钥模式使用 OpenSSH BatchMode；两者都不经过主机 Shell。
-- 端口隧道：USB `iproxy` 只实现本机→设备，并将主机监听绑定 `127.0.0.1`；设备服务由 UDID 与 usbmuxd 通道选择，不使用设备 IP。已验证 SSH 会话上的 `-L` 实现本机→设备，`-R` 实现设备→本机；SSH 转发规格的监听端和目标端均为 `127.0.0.1`，参数固定包含 `ExitOnForwardFailure=yes` 和 `GatewayPorts=no`，不暴露 LAN 端口。
-- 隧道生命周期：后端保存不可猜测隧道 ID、UDID、可选 `sessionId`、方向、端口和直接子进程。列表时检测并移除已退出子进程；显式停止只处理精确 ID。关闭 SSH 会话清理与该 `sessionId` 绑定的 `-L` / `-R` 隧道；独立 USB `iproxy` 保留到显式停止或应用退出。退出会清理全部仍受管的 iOS 隧道。
+- SSH 文件：USB 模式由受管本机回环转发将设备 SSH 端口映射到 `127.0.0.1`；LAN 模式只接受私网、回环或链路本地字面 IP。随包客户端直接从一次性回环 broker 取得密码，私钥模式只读取用户明确选择的未加密密钥；两者都不经过主机 Shell。
+- 端口隧道：USB 首选随包、精确版本校验通过的 go-ios `1.3.2-mobius.1`，其公开补丁把监听收紧到 `127.0.0.1`；启动或就绪检测失败时才尝试可选 `iproxy` 回退。两者只实现本机→设备，设备服务由 UDID 与 usbmuxd 通道选择，不使用设备 IP。已验证 SSH 会话上的 `-L` 实现本机→设备，`-R` 实现设备→本机；SSH 客户端请求的监听端和目标端均为 `127.0.0.1`，并固定包含 `ExitOnForwardFailure=yes`。`-R` 的最终监听受设备 sshd 策略约束；启用 `GatewayPorts yes` 可能把请求的回环绑定改写为通配监听，因此此配置下不创建反向隧道。未经 Mobius 补丁和版本校验的 go-ios 不用于转发。
+- 隧道生命周期：后端保存不可猜测隧道 ID、UDID、可选 `sessionId`、方向、端口和直接子进程。列表时检测并移除已退出子进程；显式停止只处理精确 ID。关闭 SSH 会话清理与该 `sessionId` 绑定的 `-L` / `-R` 隧道；独立 USB 转发保留到显式停止或应用退出。退出会清理全部仍受管的 iOS 隧道。
 - 会话建立时先验证密码或私钥登录并规范化允许目录；浏览、上传、下载、新建和删除都必须留在这些根目录内，拒绝通过符号链接越界，且不能删除允许根本身。
 - 当前产品范围只考虑用户拥有或获准测试的越狱设备；设备现有的越狱、AppSync、签名与信任状态均保持不变。
-- 屏幕：`idevicescreenshot` 只能面向精确 UDID 的已配对 USB/网络 screenshotr 服务。后端每次重新核对目标、在私有临时目录采集、校验 PNG/尺寸/像素/大小，再内嵌显示或写入剪贴板/用户目录。`ios-ssh:*` 手工端点在调用外部屏幕工具前就会被拒绝。
+- 屏幕：go-ios `screenshot` 只能面向精确 UDID 的已配对 USB/网络 screenshotr 服务，失败时可回退到已配置的 `idevicescreenshot`。后端每次重新核对目标、在私有临时目录采集、校验 PNG/尺寸/像素/大小，再内嵌显示或写入剪贴板/用户目录。`ios-ssh:*` 手工端点在调用外部屏幕工具前就会被拒绝。
 - iOS Frida 进程由 Root SSH 会话精确归属，设备和主机两端均只绑定回环地址。系统概览、进程、固定路径工具检测和 syslog 使用后端白名单、枚举请求和有界输出；Respring/重启还要求后端短时单次票据与实际 SSH 目标复核。
 
 ## 信息架构
@@ -75,8 +79,8 @@ Rust 命令边界 ── 输入校验 ── 会话资源归属
 1. `工作台`：固定启动页，首屏展示 Android 内嵌 scrcpy 连续视频或 iOS 配对 screenshotr 采样画面；使用“紧凑纵向手机画面 + 屏幕操作 + 设备连接”布局。设备完整信息只在二级管理弹窗展示。
 2. `应用`：本地 APK/IPA 分析、安装、设备应用与导出。
 3. `文件`：远端文件浏览和传输。
-4. `网络`：Android 测试代理与 ADB forward/reverse；iOS USB `iproxy` 本机转发与 SSH `-L` / `-R` 双向回环隧道。
-5. `调试`：Frida、系统/进程、iOS libimobiledevice 固定主机工具与高级 Shell。
+4. `网络`：Android 测试代理与 ADB forward/reverse；iOS USB go-ios（`iproxy` 回退）本机转发与 SSH `-L` / `-R` 双向回环隧道。
+5. `调试`：Frida、系统/进程、iOS go-ios 固定主机工具与高级 Shell。
 6. `设置`：工具链、网络、文件与媒体、安全和外观。
 
 当前设备始终显示在页面上方的上下文栏，并可在任何主要页面原地切换。工具链只在底部状态栏显示聚合健康状态，点击精确进入“设置 → 工具链”；完整路径、版本与修复入口不再占用工作台。屏幕与连接集中在工作台首屏，代理、应用、文件和调试动作各自归入对应对象页。
@@ -103,19 +107,32 @@ UI 默认只创建 Reverse，不修改系统代理。只有用户明确选择“
 
 ## 工具解析与受控分发
 
-后端已接入持久化工具配置和统一解析器，优先级如下：
+后端已接入持久化工具配置和统一解析器。发行安装默认直接命中对应目标的受控随包工具，不需要用户配置 `PATH`；开发者仍可覆盖，完整优先级如下：
 
-1. 用户显式选择的 `adb`、`scrcpy`、Frida CLI 路径，或用户指定的受控工具目录、iOS 工具目录。
+1. 用户显式选择的 `adb`、`scrcpy` 路径，或用户指定的受控工具目录、iOS/SSH 备用工具目录。
 2. 当前目标平台安装包的 `resources/tools` 目录。
 3. `ANDROID_HOME`、`ANDROID_SDK_ROOT` 及常见 Android SDK 目录。
 4. 系统 `PATH`。
 
-解析结果会标记为 `configured`、`bundled`、`sdk` 或 `path`，设置页展示实际路径和来源。`get_tool_health` 将 `ffmpeg` 与 `scrcpy` 分开报告，也将 `idevicepair` 与 `idevicesyslog` 作为独立 iOS 工具检测；一个 libimobiledevice 程序就绪不代表其他程序必然存在。`ffmpeg` 可从受控工具目录或 `PATH` 解析，`scrcpy` 还必须能找到与客户端版本匹配的 Server 文件才能建立内嵌流。当前源码只提供 `resources/tools` 的目录约定，**没有附带第三方可执行文件，也不会自动下载**；这包括 `scrcpy-server` 和 `ffmpeg`。发行方只有在完成再分发许可证、NOTICE/SBOM、上游来源、SHA-256、依赖扫描和平台签名审查后，才能把工具放入随包目录；不得静默使用未经验证的文件。设备端 Frida Server 不走随包解析，始终由用户按版本和 ABI 选择。
+解析结果会标记为 `configured`、`bundled`、`sdk` 或 `path`，设置页展示实际路径和来源。失效的预览版显式路径可以回到已审查的随包副本，但不会进一步静默替换为未知 SDK/PATH 文件。健康检查的必需项为 `adb`、`scrcpy`、`ffmpeg`、`aapt2`、`ios`（go-ios）、`ssh` 与 `scp`；主机 Frida CLI、`apkanalyzer` 和 libimobiledevice 工具都不是发行包的核心依赖。
+
+每个原生发布任务依据 `packaging/toolchain.lock.json` 生成 `resources/tools/<target>`：
+
+- scrcpy 4.1 官方便携归档提供客户端、匹配 `scrcpy-server` 与 ADB 37.0.0；Windows 还保留同归档运行库。
+- Google Maven AAPT2 `9.4.0-15978811` 提供 APK 分析器与完整 `NOTICE`。
+- FFmpeg `9.0.1` 从固定源码构建，只启用 H.264→MJPEG 所需的 LGPL 组件，不启用 GPL、nonfree、网络或外部编解码器。
+- go-ios `1.3.2-mobius.1` 从固定提交构建，使用仓库公开补丁标记版本，并将转发与可选截图服务绑定从所有网卡改为 `127.0.0.1`。
+- Mobius SSH/SFTP `0.2.0` 从仓库内审查源码和锁定 Go 模块构建，只接受后端生成的参数子集，支持密码/私钥执行、单文件 SFTP 和回环 `-L`/`-R`。首次主机密钥写入应用私有 `known_hosts`，变更后拒绝连接。
+
+准备脚本在解包前核对 HTTPS 来源、精确大小和 SHA-256，限制归档成员类型与展开容量；源码归档中的许可只按锁定路径提取普通文件，不跟随符号链接。验证脚本核对目标架构、逐文件清单、执行权限和原生版本冒烟测试。生成的 `manifest.json` 与工具同包，目标 ADB/AAPT2 NOTICE、scrcpy 便携依赖许可/内嵌声明、FFmpeg 配置、Go 许可和 go-ios/Mobius SSH 依赖许可位于相邻 `licenses/`。Release 另附 scrcpy 及其便携依赖、FFmpeg、go-ios/Go、Mobius SSH 模块的完整第三方源码、链接索引与构建/重链脚本归档，其哈希进入 `SHA256SUMS.txt`。工具不会在已安装应用运行时下载或静默更新。
+
+越狱会话的 `ssh`/`scp` 已随安装包提供，不依赖系统 OpenSSH 或 `PATH`。Windows Apple Mobile Device 驱动/服务、Linux usbmuxd/udev、设备信任、Developer Disk Image、越狱 SSH 服务、AppSync 和设备端安装器属于系统/设备集成，不能打包为普通应用资源。设备端 Frida Server 也不走随包解析，始终由用户按版本和 ABI 选择；Mobius 没有主机 Frida CLI 依赖。
 
 ## 测试策略
 
-- 纯逻辑单元测试：解析 ADB 输出、端口映射、iOS 隧道方向/回环参数、libimobiledevice 固定调用、文件列表、地址与路径校验。
-- 伪工具集成测试：使用可控的假 `adb` / `scrcpy` / `ffmpeg` / `idevice_*` / `iproxy` / `ssh` / `scp` 可执行程序覆盖超时、乱码、超大输出、链路中断、会话清理与失败码。
+- 纯逻辑单元测试：解析 ADB/go-ios 输出、端口映射、iOS 隧道方向/回环与精确加固版本、libimobiledevice 固定回退、文件列表、地址与路径校验。
+- 伪工具集成测试：使用可控的假 `adb` / `scrcpy` / `ffmpeg` / `ios` / `idevice_*` / `iproxy` / `ssh` / `scp` 可执行程序覆盖超时、乱码、超大输出、链路中断、会话清理与失败码。
+- 工具资源测试：原生 runner 重新下载锁定归档、比对 ADB、验证 scrcpy 依赖许可，从源码构建 FFmpeg/go-ios/Mobius SSH，运行 SSH 安全边界单测，验证逐文件哈希、目标架构与版本冒烟；macOS 签名后刷新并再次验证清单。
 - 三平台构建测试：每次提交执行前端构建、`cargo check` 和 `cargo test`。
-- 实体设备测试：Android USB/Wi-Fi/模拟器、内嵌连续视频与单帧降级、旋转布局、会话清理、截图/录屏/剪贴板；越狱 iOS 的已配对 screenshotr、四个 libimobiledevice 固定操作、USB iproxy、SSH `-L` / `-R` 与会话/退出清理。未被 `idevice_id -l/-n` 实际枚举的开发环境不能记为 iOS 真机通过。
+- 实体设备测试：Android USB/Wi-Fi/模拟器、内嵌连续视频与单帧降级、旋转布局、会话清理、截图/录屏/剪贴板；越狱 iOS 的已配对 screenshotr、四个 go-ios 固定操作与 libimobiledevice 回退、go-ios/`iproxy` USB 转发、SSH `-L` / `-R` 与会话/退出清理。未被 `ios list --details`（或明确测试的回退通道）实际枚举的开发环境不能记为 iOS 真机通过。
 - 发布验收：安装、升级、卸载、签名校验、SmartScreen/Gatekeeper、Linux udev 和 Wayland/X11。

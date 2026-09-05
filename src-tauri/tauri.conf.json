@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mobius Device Lab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "dev.mobius.device-lab",
   "build": {
     "beforeDevCommand": "pnpm run dev",
@@ -41,6 +41,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/tools/**/*"]
+    "resources": ["resources/tools/**/*"],
+    "linux": {
+      "deb": {
+        "recommends": ["usbmuxd"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   }
 }

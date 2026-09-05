@@ -24,122 +24,55 @@ const TOOL_SPECS: &[ToolSpec] = &[
         version_args: Some(&["version"]),
         purpose: "Android device discovery, shell, files, networking, install and export",
         required: true,
-        install_hint: "Install Android SDK Platform-Tools or select the adb executable in Toolchain settings.",
+        install_hint: "ADB is included with Mobius. Reinstall the application, or select a reviewed replacement executable.",
     },
     ToolSpec {
         id: "scrcpy",
         name: "scrcpy",
         version_args: Some(&["--version"]),
         purpose: "Android screen mirroring and interactive control",
-        required: false,
-        install_hint: "Install scrcpy from its official release or package manager, or select its executable.",
+        required: true,
+        install_hint: "scrcpy and its matching Server are included with Mobius. Reinstall the application, or select a reviewed replacement.",
     },
     ToolSpec {
         id: "ffmpeg",
         name: "FFmpeg",
         version_args: Some(&["-version"]),
         purpose: "Decode the private scrcpy H.264 stream for the embedded cross-platform screen view",
-        required: false,
-        install_hint: "Install ffmpeg or place it in the configured managed tools directory to enable embedded live Android video.",
-    },
-    ToolSpec {
-        id: "frida",
-        name: "Frida CLI",
-        version_args: Some(&["--version"]),
-        purpose: "Host-side Frida client used with a user-supplied device server",
-        required: false,
-        install_hint: "Install frida-tools in an isolated Python environment or select the frida executable.",
+        required: true,
+        install_hint: "A minimal LGPL FFmpeg build is included with Mobius. Reinstall the application if it is unavailable.",
     },
     ToolSpec {
         id: "aapt2",
         name: "Android Asset Packaging Tool",
         version_args: Some(&["version"]),
         purpose: "Detailed APK manifest, version, label and permission analysis",
-        required: false,
-        install_hint: "Install Android SDK Build-Tools or point the managed tools directory at aapt2.",
-    },
-    ToolSpec {
-        id: "apkanalyzer",
-        name: "Android APK Analyzer",
-        // apkanalyzer has no portable version flag; recent releases return exit 0
-        // with an error-like usage line for `--version`, so executable resolution is
-        // the honest readiness probe here.
-        version_args: None,
-        purpose: "Secondary APK metadata analyzer when aapt2 is unavailable",
-        required: false,
-        install_hint: "Install Android SDK Command-line Tools or provide apkanalyzer in a configured tools directory.",
-    },
-    ToolSpec {
-        id: "idevice_id",
-        name: "iOS Device Discovery",
-        version_args: Some(&["--version"]),
-        purpose: "USB/network discovery of paired iOS devices",
         required: true,
-        install_hint: "Install libimobiledevice or provide its iOS command directory.",
+        install_hint: "The standalone AAPT2 analyzer is included with Mobius. Reinstall the application if it is unavailable.",
     },
     ToolSpec {
-        id: "ideviceinfo",
-        name: "iOS Device Info",
-        version_args: Some(&["--version"]),
-        purpose: "Read paired iOS device identity and operating-system information",
+        id: "ios",
+        name: "go-ios",
+        version_args: Some(&["version"]),
+        purpose: "Bundled iOS discovery, device information, apps, installation, screenshots and logs",
         required: true,
-        install_hint: "Install libimobiledevice or provide its iOS command directory.",
-    },
-    ToolSpec {
-        id: "idevicepair",
-        name: "iOS Pairing Status",
-        version_args: Some(&["--version"]),
-        purpose: "Validate the selected iOS device pairing and trust relationship",
-        required: false,
-        install_hint: "Install libimobiledevice or provide idevicepair in the configured iOS tools directory.",
-    },
-    ToolSpec {
-        id: "ideviceinstaller",
-        name: "iOS Package Installer",
-        version_args: Some(&["--version"]),
-        purpose: "Install signed IPA packages on trusted or jailbreak-enabled devices",
-        required: false,
-        install_hint: "Install ideviceinstaller or provide it in the configured iOS tools directory.",
-    },
-    ToolSpec {
-        id: "idevicescreenshot",
-        name: "iOS Screenshot Service Client",
-        version_args: Some(&["--version"]),
-        purpose: "Capture a paired iOS device screen for inline preview and screenshots",
-        required: false,
-        install_hint: "Install libimobiledevice with idevicescreenshot, then pair/trust the device and mount its matching Developer Disk Image.",
-    },
-    ToolSpec {
-        id: "idevicesyslog",
-        name: "iOS System Log Relay",
-        version_args: Some(&["--version"]),
-        purpose: "Capture a bounded system-log snapshot from a selected iOS device",
-        required: false,
-        install_hint: "Install libimobiledevice or provide idevicesyslog in the configured iOS tools directory.",
-    },
-    ToolSpec {
-        id: "iproxy",
-        name: "USB Port Tunnel",
-        version_args: Some(&["--version"]),
-        purpose: "Expose a jailbreak device SSH port over its USB connection",
-        required: false,
-        install_hint: "Install usbmuxd/libusbmuxd tools or provide iproxy in the iOS tools directory.",
+        install_hint: "A loopback-hardened go-ios build is included with Mobius. Reinstall the application, or select a reviewed replacement for non-forwarding operations.",
     },
     ToolSpec {
         id: "ssh",
-        name: "OpenSSH Client",
+        name: "Mobius SSH Client",
         version_args: Some(&["-V"]),
         purpose: "Authenticated command execution on an explicitly selected jailbreak device",
         required: true,
-        install_hint: "Enable or install the operating system OpenSSH Client, or provide ssh in the iOS tools directory.",
+        install_hint: "The restricted Mobius SSH client is included with the application. Reinstall Mobius, or select a reviewed compatible client.",
     },
     ToolSpec {
         id: "scp",
-        name: "OpenSSH Secure Copy",
-        version_args: None,
+        name: "Mobius SFTP Transfer",
+        version_args: Some(&["-V"]),
         purpose: "File transfer to and from an explicitly selected jailbreak device",
         required: true,
-        install_hint: "Enable or install the operating system OpenSSH Client, or provide scp in the iOS tools directory.",
+        install_hint: "The restricted Mobius SFTP transfer helper is included with the application. Reinstall Mobius, or select a reviewed compatible client.",
     },
 ];
 
@@ -186,7 +119,16 @@ pub async fn get_tool_health() -> ApiResult<Vec<ToolHealth>> {
                     hint,
                 };
 
-                let Some(raw_args) = spec.version_args else {
+                // The bundled SFTP entry point has a deterministic -V flag.
+                // A developer-selected OpenSSH scp fallback has no portable
+                // version flag, so keep it healthy after path validation.
+                let version_args =
+                    if spec.id == "scp" && resolved.source != toolchain::ToolSource::Bundled {
+                        None
+                    } else {
+                        spec.version_args
+                    };
+                let Some(raw_args) = version_args else {
                     return common(None, "ready".into(), None);
                 };
                 let args = raw_args

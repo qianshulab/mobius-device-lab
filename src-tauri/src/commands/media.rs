@@ -1,4 +1,4 @@
-use super::{blocking_api, files::run_adb_shell};
+use super::{blocking_api, files::run_adb_shell, ios_native};
 use crate::{
     models::{
         AndroidScreenFrameResult, AndroidScreenRecordingResult, AndroidScreenRecordingSession,
@@ -6,7 +6,10 @@ use crate::{
         IosScreenCapability, IosScreenTargetRequest, IosScreenshotRequest,
         StartAndroidScreenRecordingRequest, StopAndroidScreenRecordingRequest,
     },
-    runner::{background_command, resolve_tool, run_checked, run_process},
+    runner::{
+        background_command, clear_ambient_adb_server_environment, resolve_tool, run_checked,
+        run_process,
+    },
     state::{AppState, ManagedAndroidScreenRecording},
     validation,
 };
@@ -193,7 +196,9 @@ fn capture_screenshot(
 fn capture_inline_frame(serial: &str) -> Result<AndroidScreenFrameResult, ApiError> {
     validation::serial(serial)?;
     let executable = resolve_tool("adb")?;
-    let mut child = background_command(executable)
+    let mut command = background_command(executable);
+    clear_ambient_adb_server_environment(&mut command);
+    let mut child = command
         .args(["-s", serial, "exec-out", "screencap", "-p"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -393,6 +398,24 @@ fn capture_ios_screenshot_inner(
 fn capture_ios_png(udid: &str) -> Result<(CaptureTarget, &'static str), ApiError> {
     let transport = detect_ios_screen_transport(udid)?;
     let target = CaptureTarget::prepare(None, "mobius-ios-frame", "png")?;
+    let mut go_ios_error = None;
+    if ios_native::available() {
+        match ios_native::capture_screenshot(udid, target.path(), IOS_SCREENSHOT_TIMEOUT) {
+            Ok(_) => {
+                inspect_png(target.path()).map_err(|_| {
+                    ApiError::new(
+                        "unsupported_ios_screen_format",
+                        "The iOS device returned an unsupported or invalid screen image; PNG is required",
+                    )
+                })?;
+                return Ok((target, transport));
+            }
+            Err(error) => {
+                go_ios_error = Some(error);
+                let _ = fs::remove_file(target.path());
+            }
+        }
+    }
     let mut args = vec!["-u".into(), udid.into()];
     if transport == "network" {
         args.push("-n".into());
@@ -408,8 +431,10 @@ fn capture_ios_png(udid: &str) -> Result<(CaptureTarget, &'static str), ApiError
         } else {
             "The paired iOS device did not return a screenshot. Check the USB/network connection, trust state, and Developer Disk Image."
         };
-        ApiError::new("ios_screen_capture_failed", message)
-            .with_details(serde_json::json!({ "cause": error.code }))
+        ApiError::new("ios_screen_capture_failed", message).with_details(serde_json::json!({
+            "goIos": go_ios_error.map(|cause| serde_json::json!({ "code": cause.code, "message": cause.message })),
+            "libimobiledevice": { "code": error.code, "message": error.message }
+        }))
     })?;
     inspect_png(target.path()).map_err(|_| {
         ApiError::new(
@@ -427,6 +452,17 @@ fn detect_ios_screen_transport(udid: &str) -> Result<&'static str, ApiError> {
             "ios_screen_target_unavailable",
             "An SSH-only iOS endpoint has no paired screenshot service. Connect the device through USB/usbmux or an already paired lockdown network connection.",
         ));
+    }
+    if ios_native::available() {
+        if let Ok(devices) = ios_native::list_devices(Duration::from_secs(8)) {
+            if let Some(device) = devices.into_iter().find(|device| device.udid == udid) {
+                return Ok(if device.connection == "network" {
+                    "network"
+                } else {
+                    "usb"
+                });
+            }
+        }
     }
     let usb = run_checked("idevice_id", &["-l".into()], Duration::from_secs(8))?;
     if output_has_exact_identifier(&usb.stdout, udid) {

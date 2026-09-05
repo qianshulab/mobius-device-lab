@@ -393,7 +393,7 @@ export default function AppsPage({ activeDevice, iosSshReady = false, iosSession
       <Tabs value={view} onChange={setView} options={[{ id: "package", label: "本地包解析与安装" }, { id: "installed", label: "设备应用与导出" }]} />
       {!runningInDesktop() && <InlineNotice tone="info" title="当前是浏览器界面预览">可以真实选择本机 APK/IPA，并计算文件摘要；完整清单解析、安装和导出只会在 Mobius 桌面应用中调用本机工具。</InlineNotice>}
       {activeDevice?.platform === "ios" && iosRootReady && <div className="ios-app-capability-strip">
-        <span><StatusBadge tone="success">ROOT SSH</StatusBadge> {iosSession?.mode === "usb" ? "USB + iproxy" : "LAN SSH"}</span>
+        <span><StatusBadge tone="success">ROOT SSH</StatusBadge> {iosSession?.mode === "usb" ? "USB 直连" : "LAN SSH"}</span>
         <span><StatusBadge tone={iosCapabilities?.installers.length ? "success" : iosCapabilitiesLoading ? "neutral" : "warning"}>{iosCapabilitiesLoading ? "探测中" : iosCapabilities?.preferredInstaller?.name ?? "无设备安装器"}</StatusBadge> IPA</span>
         <span><StatusBadge tone={iosCapabilities?.listingAvailable ? "success" : "warning"}>{iosCapabilities?.listingAvailable ? "可用" : "待检测"}</StatusBadge> 应用清单</span>
         <span><StatusBadge tone={iosCapabilities?.exportAvailable ? "success" : "warning"}>{iosCapabilities?.exportAvailable ? "可用" : "待检测"}</StatusBadge> .app 导出</span>
