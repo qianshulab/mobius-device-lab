@@ -31,6 +31,15 @@ H264_SMOKE_FRAME = (
     "AAAAAWdCwAraewEQAAADABAAAAMAKPEiagAAAAFozg/IAAABZYiEOhGKAAI4scAAQaI4ABXA"
 )
 MACOS_MINIMUM_VERSION = (12, 0, 0)
+# Google still ships the Windows platform-tools 37.0.0 ADB client and its two
+# companion DLLs as PE32/i386 binaries. They are the only 32-bit payloads we
+# intentionally permit in the x86_64 package; Windows x64 runs them through
+# WoW64, and their exact size/SHA-256 values are pinned in the toolchain lock.
+WINDOWS_X86_VENDOR_FILES = {
+    "adb.exe",
+    "AdbWinApi.dll",
+    "AdbWinUsbApi.dll",
+}
 BANNED_SUFFIXES = {
     ".7z",
     ".apk",
@@ -218,8 +227,24 @@ def verify_machine(file_path: Path, target: str) -> None:
                 header = stream.read(6)
         else:
             header = data[offset : offset + 6]
-        if header[:4] != b"PE\0\0" or struct.unpack_from("<H", header, 4)[0] != 0x8664:
-            raise VerifyError(f"Expected a Windows x86_64 executable: {file_path}")
+        if header[:4] != b"PE\0\0":
+            raise VerifyError(f"Invalid PE header: {file_path}")
+        machine = struct.unpack_from("<H", header, 4)[0]
+        expected_machines = (
+            {0x014C, 0x8664}
+            if file_path.name in WINDOWS_X86_VENDOR_FILES
+            else {0x8664}
+        )
+        if machine not in expected_machines:
+            expected = (
+                "Windows x86 or x86_64"
+                if len(expected_machines) == 2
+                else "Windows x86_64"
+            )
+            raise VerifyError(
+                f"Expected a {expected} executable: {file_path} "
+                f"(PE machine 0x{machine:04x})"
+            )
         return
 
     if target.startswith("linux-"):
