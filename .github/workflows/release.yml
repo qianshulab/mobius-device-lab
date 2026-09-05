@@ -142,19 +142,39 @@ jobs:
               core.info(`Reusing release ${release.id} for ${tag}`);
             } catch (error) {
               if (error.status !== 404) throw error;
-              const response = await github.rest.repos.createRelease({
-                owner,
-                repo,
-                tag_name: tag,
-                target_commitish: context.sha,
-                name: `Mobius Device Lab ${version}`,
-                body: releaseBody,
-                draft: true,
-                prerelease,
-                generate_release_notes: true,
-              });
-              release = response.data;
-              core.info(`Created draft release ${release.id} for ${tag}`);
+              const releases = await github.paginate(
+                github.rest.repos.listReleases,
+                { owner, repo, per_page: 100 },
+              );
+              const matchingDrafts = releases
+                .filter((candidate) => candidate.draft && candidate.tag_name === tag)
+                .sort(
+                  (left, right) =>
+                    right.assets.length - left.assets.length || right.id - left.id,
+                );
+              if (matchingDrafts.length > 0) {
+                release = matchingDrafts[0];
+                core.info(`Reusing draft release ${release.id} for ${tag}`);
+                if (matchingDrafts.length > 1) {
+                  core.warning(
+                    `Found ${matchingDrafts.length} draft releases for ${tag}; using ${release.id}`,
+                  );
+                }
+              } else {
+                const response = await github.rest.repos.createRelease({
+                  owner,
+                  repo,
+                  tag_name: tag,
+                  target_commitish: context.sha,
+                  name: `Mobius Device Lab ${version}`,
+                  body: releaseBody,
+                  draft: true,
+                  prerelease,
+                  generate_release_notes: true,
+                });
+                release = response.data;
+                core.info(`Created draft release ${release.id} for ${tag}`);
+              }
             }
 
             const releaseWasPublished = !release.draft;
@@ -437,10 +457,47 @@ jobs:
           ) > SHA256SUMS.txt
 
       - name: Upload checksum manifest
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release upload "$RELEASE_TAG" SHA256SUMS.txt --clobber
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const { owner, repo } = context.repo;
+            const releaseId = Number(process.env.RELEASE_ID);
+            if (!Number.isSafeInteger(releaseId)) {
+              core.setFailed(`Invalid release id: ${process.env.RELEASE_ID}`);
+              return;
+            }
+
+            const name = "SHA256SUMS.txt";
+            const checksumPath = "SHA256SUMS.txt";
+            const existingAssets = await github.paginate(
+              github.rest.repos.listReleaseAssets,
+              { owner, repo, release_id: releaseId, per_page: 100 },
+            );
+            for (const asset of existingAssets.filter((item) => item.name === name)) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner,
+                repo,
+                asset_id: asset.id,
+              });
+            }
+
+            const data = fs.readFileSync(checksumPath);
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              release_id: releaseId,
+              name,
+              data,
+              headers: {
+                "content-type": "text/plain; charset=utf-8",
+                "content-length": data.length,
+              },
+            });
+            core.notice(`Uploaded ${name} to release ${releaseId}`);
 
       - name: Publish release when requested
         if: needs.prepare.outputs.publish == 'true'
