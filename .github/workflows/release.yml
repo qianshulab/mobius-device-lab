@@ -269,7 +269,7 @@ jobs:
             platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             resource_target: linux-x86_64
-            bundles: appimage,deb
+            bundles: deb
           - label: macOS Apple Silicon
             platform: macos-latest
             rust_target: aarch64-apple-darwin
@@ -477,10 +477,10 @@ jobs:
             --root src-tauri/resources/tools
 
       - name: Build and upload native package
+        if: runner.os != 'Linux'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NO_STRIP: ${{ runner.os == 'Linux' && '1' || '' }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}
@@ -494,18 +494,64 @@ jobs:
           retryAttempts: 2
           args: --target ${{ matrix.rust_target }} --bundles ${{ matrix.bundles }}
 
-      - name: Finalize and replace AppImage after linuxdeploy normalization
+      - name: Build and upload Linux DEB
+        if: runner.os == 'Linux'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: "1"
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseDraft: ${{ needs.prepare.outputs.release_draft }}
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
+          uploadWorkflowArtifacts: false
+          releaseAssetNamePattern: "Mobius-Device-Lab_[version]_[platform]_[arch][setup][ext]"
+          retryAttempts: 2
+          args: --target ${{ matrix.rust_target }} --bundles deb
+
+      - name: Build AppImage without rewriting the managed toolchain
         if: runner.os == 'Linux'
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          NO_STRIP: "1"
         run: |
           set -euo pipefail
           shopt -s nullglob
 
+          source_bundle="src-tauri/resources/tools/${{ matrix.resource_target }}"
+          staged_root="$RUNNER_TEMP/mobius-appimage-resources"
+          staged_bundle="$staged_root/${{ matrix.resource_target }}"
           target_root="src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage"
+          if [[ ! -d "$source_bundle" || -e "$staged_root" ]]; then
+            echo "The verified Linux tool bundle cannot be staged safely." >&2
+            exit 1
+          fi
+
+          mkdir -p "$staged_root"
+          mv "$source_bundle" "$staged_bundle"
+          restore_source_bundle() {
+            if [[ -d "$staged_bundle" && ! -e "$source_bundle" ]]; then
+              mv "$staged_bundle" "$source_bundle"
+            fi
+          }
+          trap restore_source_bundle EXIT
+
+          # linuxdeploy recursively treats every ELF below the AppDir as an
+          # application dependency. Keep the already-closed, version-locked
+          # mobile toolchain out of that normalization pass, then inject it
+          # unchanged before the final AppImage is emitted.
+          rm -rf "$target_root"
+          pnpm tauri build --verbose \
+            --target "${{ matrix.rust_target }}" \
+            --bundles appimage
+
+          restore_source_bundle
+          trap - EXIT
+
           appdirs=("$target_root"/*.AppDir)
           appimages=("$target_root"/*.AppImage)
           if [[ "${#appdirs[@]}" -ne 1 || "${#appimages[@]}" -ne 1 ]]; then
@@ -513,17 +559,21 @@ jobs:
             exit 1
           fi
 
-          mapfile -t manifests < <(
-            find "${appdirs[0]}" -type f \
-              -path "*/resources/tools/linux-x86_64/manifest.json" -print
+          mapfile -t tools_roots < <(
+            find "${appdirs[0]}" -type d -path "*/resources/tools" -print
           )
-          if [[ "${#manifests[@]}" -ne 1 ]]; then
-            echo "Expected one AppImage tool manifest." >&2
+          if [[ "${#tools_roots[@]}" -ne 1 ]]; then
+            echo "Expected one AppImage resources/tools directory." >&2
             exit 1
           fi
-          bundle_dir="$(dirname "${manifests[0]}")"
-          tools_root="$(dirname "$bundle_dir")"
-          python3 scripts/refresh_tool_manifest.py --bundle "$bundle_dir"
+          tools_root="${tools_roots[0]}"
+          bundle_dir="$tools_root/${{ matrix.resource_target }}"
+          if [[ -e "$bundle_dir" ]]; then
+            echo "linuxdeploy unexpectedly retained the staged target bundle." >&2
+            exit 1
+          fi
+          cp -a "$source_bundle" "$tools_root/"
+
           python3 scripts/verify_tool_bundle.py \
             --lock packaging/toolchain.lock.json \
             --target "${{ matrix.resource_target }}" \
@@ -547,10 +597,6 @@ jobs:
             exit 1
           fi
           install -m 0755 "$rebuilt" "${appimages[0]}"
-
-          release_asset="$RUNNER_TEMP/Mobius-Device-Lab_${RELEASE_VERSION}_linux_amd64.AppImage"
-          cp "${appimages[0]}" "$release_asset"
-          gh release upload "$RELEASE_TAG" "$release_asset" --clobber
 
       - name: Verify toolchain inside Windows installer
         if: runner.os == 'Windows'
@@ -618,6 +664,25 @@ jobs:
               --target "${{ matrix.resource_target }}" \
               --root "$tools_root"
           done
+
+      - name: Upload verified Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(src-tauri/target/${{ matrix.rust_target }}/release/bundle/appimage/*.AppImage)
+          if [[ "${#appimages[@]}" -ne 1 ]]; then
+            echo "Expected exactly one verified AppImage." >&2
+            exit 1
+          fi
+          release_asset="$RUNNER_TEMP/Mobius-Device-Lab_${RELEASE_VERSION}_linux_amd64.AppImage"
+          cp "${appimages[0]}" "$release_asset"
+          gh release upload "$RELEASE_TAG" "$release_asset" --clobber
 
       - name: Verify toolchain inside macOS disk image
         if: runner.os == 'macOS'
