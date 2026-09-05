@@ -1,0 +1,35 @@
+[package]
+name = "mobius-device-lab"
+version = "0.1.0"
+description = "A cross-platform mobile device operations workbench"
+authors = ["Mobius Device Lab"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "mobius_device_lab_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.2"
+if-addrs = "0.13.4"
+md-5 = "0.10"
+plist = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["image-png"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+zeroize = { version = "1", features = ["derive"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

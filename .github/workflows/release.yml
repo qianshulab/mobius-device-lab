@@ -1,0 +1,351 @@
+name: Release desktop packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "发布标签；留空时使用 v<tauri.conf.json version>"
+        required: false
+        type: string
+      prerelease:
+        description: "标记为预发布版本"
+        required: true
+        type: boolean
+        default: false
+      publish:
+        description: "构建成功后立即公开；关闭时保留为草稿"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || inputs.release_tag || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Validate version and prepare release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      release_draft: ${{ steps.release.outputs.release_draft }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      publish: ${{ steps.release.outputs.publish }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify versions and create draft release
+        id: release
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+          REQUESTED_PRERELEASE: ${{ inputs.prerelease }}
+          REQUESTED_PUBLISH: ${{ inputs.publish }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+
+            const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const tauriConfig = JSON.parse(
+              fs.readFileSync("src-tauri/tauri.conf.json", "utf8"),
+            );
+            const cargoToml = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
+            const packageSection = cargoToml
+              .split(/^\[package\]\s*$/m)[1]
+              ?.split(/^\[/m)[0];
+            const cargoVersion = packageSection?.match(
+              /^version\s*=\s*"([^"]+)"\s*$/m,
+            )?.[1];
+
+            const versions = {
+              "package.json": packageJson.version,
+              "src-tauri/Cargo.toml": cargoVersion,
+              "src-tauri/tauri.conf.json": tauriConfig.version,
+            };
+            for (const [file, version] of Object.entries(versions)) {
+              if (!version) {
+                core.setFailed(`Unable to read the application version from ${file}`);
+                return;
+              }
+            }
+
+            const uniqueVersions = new Set(Object.values(versions));
+            if (uniqueVersions.size !== 1) {
+              core.setFailed(
+                `Version mismatch: ${Object.entries(versions)
+                  .map(([file, version]) => `${file}=${version}`)
+                  .join(", ")}`,
+              );
+              return;
+            }
+
+            const version = tauriConfig.version;
+            const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+            if (!semver.test(version)) {
+              core.setFailed(`Application version is not valid SemVer: ${version}`);
+              return;
+            }
+
+            const expectedTag = `v${version}`;
+            const pushedTag = context.eventName === "push"
+              ? context.ref.replace(/^refs\/tags\//, "")
+              : "";
+            const requestedTag = (process.env.REQUESTED_TAG || "").trim();
+            const tag = pushedTag || requestedTag || expectedTag;
+            if (tag !== expectedTag) {
+              core.setFailed(
+                `Release tag ${tag} does not match application version ${version}; expected ${expectedTag}`,
+              );
+              return;
+            }
+
+            const versionIsPrerelease = version.split("+")[0].includes("-");
+            const prerelease =
+              versionIsPrerelease || process.env.REQUESTED_PRERELEASE === "true";
+            const publish =
+              context.eventName === "push" || process.env.REQUESTED_PUBLISH === "true";
+            const { owner, repo } = context.repo;
+            const releaseBody = [
+              "Windows、Linux 和 macOS 安装包由 GitHub Actions 在对应的原生 runner 上构建。",
+              "",
+              "下载后请使用 `SHA256SUMS.txt` 校验文件。未配置平台签名凭据时，Windows/Linux 产物未签名，macOS 产物仅使用 ad-hoc 签名，不等同于 Developer ID 签名和公证。",
+              "",
+              "安装包不内置 ADB、scrcpy、FFmpeg、Frida、libimobiledevice 或 OpenSSH 等第三方 CLI，设备功能仍需要用户在本机安装或显式配置已审核工具链。",
+              "",
+              "越狱 iOS SSH 的 `root/alpine` 只是隔离实验设备的便捷默认值；离开受控测试环境前应立即更换密码或改用独立密钥。",
+            ].join("\n");
+
+            let release;
+            try {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag,
+              });
+              release = response.data;
+              core.info(`Reusing release ${release.id} for ${tag}`);
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              const response = await github.rest.repos.createRelease({
+                owner,
+                repo,
+                tag_name: tag,
+                target_commitish: context.sha,
+                name: `Mobius Device Lab ${version}`,
+                body: releaseBody,
+                draft: true,
+                prerelease,
+                generate_release_notes: true,
+              });
+              release = response.data;
+              core.info(`Created draft release ${release.id} for ${tag}`);
+            }
+
+            core.setOutput("version", version);
+            core.setOutput("tag", tag);
+            core.setOutput("release_id", String(release.id));
+            core.setOutput("release_draft", String(release.draft));
+            core.setOutput("prerelease", String(prerelease));
+            core.setOutput("publish", String(publish || !release.draft));
+            await core.summary
+              .addHeading("Release preparation")
+              .addTable([
+                [
+                  { data: "Version", header: true },
+                  { data: "Tag", header: true },
+                  { data: "Release", header: true },
+                  { data: "Final state", header: true },
+                ],
+                [
+                  version,
+                  tag,
+                  String(release.id),
+                  publish || !release.draft ? "published" : "draft",
+                ],
+              ])
+              .write();
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: prepare
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            platform: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - label: Linux x64
+            platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+          - label: macOS Apple Silicon
+            platform: macos-latest
+            rust_target: aarch64-apple-darwin
+            bundles: dmg
+          - label: macOS Intel
+            platform: macos-latest
+            rust_target: x86_64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.12.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust target
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri -> src-tauri/target
+          key: ${{ matrix.rust_target }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check frontend types
+        run: pnpm run check
+
+      - name: Use ad-hoc signing when no macOS identity is configured
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CONFIGURED_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [[ -n "$CONFIGURED_IDENTITY" ]]; then
+            echo "APPLE_SIGNING_IDENTITY=$CONFIGURED_IDENTITY" >> "$GITHUB_ENV"
+          else
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and upload native package
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # Optional Developer ID signing and notarization. Without these
+          # secrets, macOS packages are ad-hoc signed for test distribution.
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseDraft: ${{ needs.prepare.outputs.release_draft }}
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: "mobius-[platform]-[arch]-[bundle]"
+          releaseAssetNamePattern: "Mobius-Device-Lab_[version]_[platform]_[arch][setup][ext]"
+          retryAttempts: 2
+          args: --target ${{ matrix.rust_target }} --bundles ${{ matrix.bundles }}
+
+  finalize:
+    name: Checksums and finalize release
+    needs: [prepare, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download all native packages
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: mobius-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          cd release-artifacts
+          find . -type f -print0 \
+            | LC_ALL=C sort -z \
+            | xargs -0 sha256sum > ../SHA256SUMS.txt
+
+      - name: Upload checksum manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$RELEASE_TAG" SHA256SUMS.txt --clobber
+
+      - name: Publish release when requested
+        if: needs.prepare.outputs.publish == 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          RELEASE_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const releaseId = Number(process.env.RELEASE_ID);
+            if (!Number.isSafeInteger(releaseId)) {
+              core.setFailed(`Invalid release id: ${process.env.RELEASE_ID}`);
+              return;
+            }
+            const response = await github.rest.repos.updateRelease({
+              owner,
+              repo,
+              release_id: releaseId,
+              draft: false,
+              prerelease: process.env.RELEASE_PRERELEASE === "true",
+            });
+            core.notice(`Release published: ${response.data.html_url}`);
