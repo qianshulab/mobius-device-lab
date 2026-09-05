@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "bundleRevision": 4,
+  "bundleRevision": 5,
   "components": {
     "scrcpy": {
       "version": "4.1",
@@ -629,10 +629,24 @@
         "--enable-muxer=mpjpeg",
         "--enable-small"
       ],
-      "targetConfigure": {
-        "windows-x86_64": [
-          "--extra-ldflags=-static"
-        ]
+      "targetPatches": {
+        "windows-x86_64": "packaging/patches/ffmpeg-9.0.1-windows-native-time.patch"
+      },
+      "targetBuildRequirements": {
+        "windows-x86_64": {
+          "compiler": "gcc",
+          "versionMarkers": [
+            "gcc",
+            "16.2.0"
+          ],
+          "forbiddenImports": [
+            "libatomic-1.dll",
+            "libgcc_s_seh-1.dll",
+            "libstdc++-6.dll",
+            "libwinpthread-1.dll",
+            "msys-2.0.dll"
+          ]
+        }
       }
     }
   }

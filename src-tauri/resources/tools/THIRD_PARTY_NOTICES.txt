@@ -148,14 +148,17 @@ Project: https://ffmpeg.org/
 This separate command build does not enable GPL or nonfree components, network,
 or external codecs. It contains only the FFmpeg command and the H.264-to-MJPEG
 pipeline components needed for the embedded Android screen. Exact source,
-license texts, and build options are distributed with each release.
+license texts, build options, and the Windows native-timing patch are distributed
+with each release. The Windows build records its compiler and PE import list and
+rejects external MinGW runtime DLL dependencies.
 
 Source and relinking material
 -----------------------------
 Every Release includes Mobius-Device-Lab_<version>_third-party-sources.tar.xz.
 It contains the complete, hash-locked upstream sources listed above, the exact
 license and NOTICE files, the go-ios patch, scrcpy's upstream build scripts,
-Mobius preparation/verification scripts, and packaging/SCRCPY_REBUILD.md.
+the FFmpeg Windows patch, Mobius preparation/verification scripts, and
+packaging/SCRCPY_REBUILD.md.
 SOURCE_INDEX.json records target linkage and SHA256SUMS.txt covers every other
 file in the archive.
 

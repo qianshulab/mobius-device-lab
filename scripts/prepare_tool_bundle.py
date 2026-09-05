@@ -1023,6 +1023,7 @@ def stage_mobius_ssh(
 
 
 def stage_ffmpeg(
+    repo_root: Path,
     lock: dict[str, Any],
     target: str,
     stager: Stager,
@@ -1030,13 +1031,48 @@ def stage_ffmpeg(
     work: Path,
 ) -> None:
     component = lock["components"]["ffmpeg"]
+    build_requirement = component.get("targetBuildRequirements", {}).get(target, {})
+    if not isinstance(build_requirement, dict):
+        raise BundleError(f"FFmpeg build requirement is invalid for {target}")
+    compiler = build_requirement.get("compiler", os.environ.get("CC", "cc"))
+    if not isinstance(compiler, str) or not compiler:
+        raise BundleError(f"FFmpeg compiler command is invalid for {target}")
+    compiler_version = run(
+        [compiler, "--version"], repo_root, build_environment(target), print_output=False
+    )
+    version_markers = build_requirement.get("versionMarkers", [])
+    if not isinstance(version_markers, list) or not all(
+        isinstance(marker, str) and marker for marker in version_markers
+    ):
+        raise BundleError(f"FFmpeg compiler version markers are invalid for {target}")
+    missing_markers = [
+        marker for marker in version_markers if marker not in compiler_version
+    ]
+    if missing_markers:
+        raise BundleError(
+            f"FFmpeg compiler for {target} is missing locked markers: "
+            f"{missing_markers}"
+        )
     artifact = checked_artifact("FFmpeg source", component["source"])
     extracted = extract_locked("ffmpeg-source", artifact, cache, work)
     source = extracted / artifact["root"]
-    configure_options = [
-        *component["configure"],
-        *component.get("targetConfigure", {}).get(target, []),
-    ]
+    patch_value = component.get("targetPatches", {}).get(target)
+    patch_path: Path | None = None
+    patch_bundle_name: str | None = None
+    if patch_value is not None:
+        if not isinstance(patch_value, str):
+            raise BundleError(f"FFmpeg patch path is invalid for {target}")
+        patch_relative = safe_relative_path(patch_value)
+        patch_bundle_name = patch_relative.name
+        patch_path = normalized_git_patch(
+            repo_root.joinpath(*patch_relative.parts),
+            work / f"ffmpeg-{target}.patch",
+            f"FFmpeg patch for {target}",
+        )
+        run(["git", "apply", "--check", str(patch_path)], source)
+        run(["git", "apply", str(patch_path)], source)
+
+    configure_options = [*component["configure"]]
     environment = build_environment(target)
     if target.endswith("x86_64") and shutil.which("nasm") is None:
         print("nasm was not found; building the locked C-only FFmpeg fallback")
@@ -1047,6 +1083,37 @@ def stage_ffmpeg(
     executable = "ffmpeg.exe" if target.startswith("windows-") else "ffmpeg"
     run(["make", f"-j{jobs}", executable], source, environment)
     built = source / executable
+    windows_imports: list[str] = []
+    if target.startswith("windows-"):
+        objdump = shutil.which("objdump")
+        if objdump is None:
+            raise BundleError("objdump is required to audit the Windows FFmpeg runtime")
+        import_report = run(
+            [objdump, "-p", str(built)],
+            source,
+            environment,
+            print_output=False,
+        )
+        windows_imports = sorted(
+            set(re.findall(r"DLL Name:\s*([^\s]+)", import_report)),
+            key=str.lower,
+        )
+        if not windows_imports:
+            raise BundleError("Unable to read Windows FFmpeg DLL imports")
+        forbidden_imports = build_requirement.get("forbiddenImports", [])
+        if not isinstance(forbidden_imports, list) or not all(
+            isinstance(name, str) and name for name in forbidden_imports
+        ):
+            raise BundleError(f"FFmpeg forbidden import list is invalid for {target}")
+        imported_lower = {name.lower() for name in windows_imports}
+        forbidden_found = sorted(
+            name for name in forbidden_imports if name.lower() in imported_lower
+        )
+        if forbidden_found:
+            raise BundleError(
+                "Windows FFmpeg has non-portable runtime imports: "
+                + ", ".join(forbidden_found)
+            )
     stager.copy(built, executable, "ffmpeg", executable=True)
     stager.copy(
         source / "COPYING.LGPLv2.1",
@@ -1059,6 +1126,23 @@ def stage_ffmpeg(
         " ".join(configure_options) + "\n",
         "ffmpeg",
     )
+    stager.write_text(
+        "licenses/ffmpeg-build-info.txt",
+        f"target: {target}\ncompiler:\n{compiler_version.strip()}\n",
+        "ffmpeg",
+    )
+    if windows_imports:
+        stager.write_text(
+            "licenses/ffmpeg-windows-imports.txt",
+            "\n".join(windows_imports) + "\n",
+            "ffmpeg",
+        )
+    if patch_path is not None and patch_bundle_name is not None:
+        stager.copy(
+            patch_path,
+            f"licenses/{patch_bundle_name}",
+            "ffmpeg",
+        )
 
 
 def write_manifest(
@@ -1153,7 +1237,7 @@ def main() -> int:
             stage_aapt2(lock, args.target, stager, cache, work)
             stage_go_ios(repo_root, lock, args.target, stager, cache, work)
             stage_mobius_ssh(repo_root, lock, args.target, stager, cache, work)
-            stage_ffmpeg(lock, args.target, stager, cache, work)
+            stage_ffmpeg(repo_root, lock, args.target, stager, cache, work)
         notices = repo_root / "src-tauri/resources/tools/THIRD_PARTY_NOTICES.txt"
         stager.copy(
             notices,

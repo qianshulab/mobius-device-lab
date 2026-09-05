@@ -103,7 +103,7 @@ python3 scripts/verify_tool_bundle.py \
 1. 按锁文件验证 HTTPS 下载的精确大小与 SHA-256，并使用带条目/容量上限的安全解包。
 2. 从 scrcpy 4.1 官方便携包提取客户端、匹配 Server、ADB 37.0.0 及 Windows 运行库；另下载精确 Google Platform Tools 37.0.0，逐字节核对 ADB/相邻 DLL 并收录对应 `NOTICE`。
 3. 从锁定源码提取 scrcpy 便携依赖的许可和内嵌第三方声明；从 Google Maven AAPT2 产物提取二进制与 `NOTICE`。
-4. 从锁定源码构建最小 LGPL FFmpeg 9.0.1，并使用 Go 1.26.5 对 go-ios 1.3.2 应用公开的 loopback/version 补丁后构建 `1.3.2-mobius.1`；macOS 默认固定 12.0 构建下限，但不抬高调用者已设的更低值。
+4. 从锁定源码构建最小 LGPL FFmpeg 9.0.1；Windows 应用公开的原生计时补丁，锁定编译器版本并审计 PE 导入，以拒绝 `libwinpthread` 等未随包运行库；macOS 默认固定 12.0 构建下限，但不抬高调用者已设的更低值。同时使用 Go 1.26.5 对 go-ios 1.3.2 应用公开的 loopback/version 补丁后构建 `1.3.2-mobius.1`。
 5. 收集许可证、Go 运行时/标准库许可、模块清单与依赖许可证，为所有随包文件生成大小、权限和 SHA-256 `manifest.json`。
 6. 验证目标架构并执行原生版本冒烟测试。macOS 发布任务之后会签名 Mach-O 文件、刷新清单并再次验证。
 

@@ -1,0 +1,34 @@
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -6989,7 +6989,15 @@ check_func  ${malloc_prefix}posix_memalign      && enable posix_memalign
+ 
+ check_func  access
+ check_func_headers stdlib.h arc4random_buf
+-check_lib   clock_gettime time.h clock_gettime || check_lib clock_gettime time.h clock_gettime -lrt
++# MinGW exposes these POSIX timing wrappers through libwinpthread. The native
++# Windows fallbacks below avoid adding that external runtime to the portable
++# command-line build.
++if test "$target_os" != "mingw32"; then
++    check_lib clock_gettime time.h clock_gettime ||
++        check_lib clock_gettime time.h clock_gettime -lrt
++else
++    disable clock_gettime
++fi
+ check_func  fcntl
+ check_func  fork
+ check_func  gethrtime
+@@ -7001,7 +7009,12 @@ check_func  mkstemp
+ check_func  mmap
+ check_func  mprotect
+ # Solaris has nanosleep in -lrt, OpenSolaris no longer needs that
+-check_func_headers time.h nanosleep || check_lib nanosleep time.h nanosleep -lrt
++if test "$target_os" != "mingw32"; then
++    check_func_headers time.h nanosleep ||
++        check_lib nanosleep time.h nanosleep -lrt
++else
++    disable nanosleep
++fi
+ check_func_headers sys/prctl.h prctl
+ check_func  sched_getaffinity
+ check_func  setrlimit

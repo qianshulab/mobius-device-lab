@@ -122,17 +122,24 @@ def source_records(lock: dict[str, Any]) -> list[dict[str, Any]]:
 
     for name in ("ffmpeg", "go-ios"):
         component = components[name]
-        records.append(
-            {
-                "label": name,
-                "version": component["version"],
-                "license": component["license"],
-                "projectUrl": component["projectUrl"],
-                "source": component["source"],
-                "licenseFiles": component["licenseFiles"],
-                "usedBy": all_targets,
-            }
-        )
+        record = {
+            "label": name,
+            "version": component["version"],
+            "license": component["license"],
+            "projectUrl": component["projectUrl"],
+            "source": component["source"],
+            "licenseFiles": component["licenseFiles"],
+            "usedBy": all_targets,
+        }
+        if "patch" in component:
+            record["patch"] = component["patch"]
+        if "targetPatches" in component:
+            record["targetPatches"] = component["targetPatches"]
+        if "targetBuildRequirements" in component:
+            record["targetBuildRequirements"] = component[
+                "targetBuildRequirements"
+            ]
+        records.append(record)
     go_toolchain = components["go-ios"]["goToolchain"]
     records.append(
         {
@@ -225,20 +232,22 @@ def stage_sources_and_licenses(
             copy_regular(license_source, license_destination, f"{label} license")
             copied_licenses.append(destination_relative.as_posix())
 
-        index.append(
-            {
-                "name": label,
-                "version": record["version"],
-                "license": record["license"],
-                "projectUrl": record["projectUrl"],
-                "sourceFile": f"sources/{file_relative.name}",
-                "sourceSize": artifact["size"],
-                "sourceSha256": artifact["sha256"],
-                "usedBy": record["usedBy"],
-                "linkage": record.get("linkage"),
-                "licenseFiles": copied_licenses,
-            }
-        )
+        index_entry = {
+            "name": label,
+            "version": record["version"],
+            "license": record["license"],
+            "projectUrl": record["projectUrl"],
+            "sourceFile": f"sources/{file_relative.name}",
+            "sourceSize": artifact["size"],
+            "sourceSha256": artifact["sha256"],
+            "usedBy": record["usedBy"],
+            "linkage": record.get("linkage"),
+            "licenseFiles": copied_licenses,
+        }
+        for metadata_key in ("patch", "targetPatches", "targetBuildRequirements"):
+            if metadata_key in record:
+                index_entry[metadata_key] = record[metadata_key]
+        index.append(index_entry)
     return index
 
 
@@ -308,10 +317,22 @@ def stage_android_notices(
     return report
 
 
-def stage_project_inputs(repo_root: Path, lock_path: Path, archive_root: Path) -> None:
+def stage_project_inputs(
+    repo_root: Path,
+    lock_path: Path,
+    lock: dict[str, Any],
+    archive_root: Path,
+) -> None:
+    patch_values = {
+        lock["components"]["go-ios"]["patch"],
+        *lock["components"]["ffmpeg"].get("targetPatches", {}).values(),
+    }
     included = [
         lock_path,
-        repo_root / "packaging/patches/go-ios-1.3.2-mobius.patch",
+        *(
+            repo_root.joinpath(*safe_relative_path(value).parts)
+            for value in sorted(patch_values)
+        ),
         repo_root / "packaging/SCRCPY_REBUILD.md",
         repo_root / "scripts/prepare_tool_bundle.py",
         repo_root / "scripts/verify_tool_bundle.py",
@@ -364,7 +385,7 @@ def main() -> int:
 
         source_index = stage_sources_and_licenses(lock, archive_root, cache, work)
         adb_notices = stage_android_notices(lock, archive_root, cache, work)
-        stage_project_inputs(repo_root, lock_path, archive_root)
+        stage_project_inputs(repo_root, lock_path, lock, archive_root)
         write_text(
             archive_root / "SOURCE_INDEX.json",
             json.dumps(
@@ -385,7 +406,7 @@ def main() -> int:
 ================================================
 
 This archive accompanies a binary Mobius release. It contains the exact upstream
-source archives, license texts, immutable lock, published go-ios patch, and build
+source archives, license texts, immutable lock, published source patches, and build
 control material needed to audit or reproduce the bundled command-line tools.
 
 The scrcpy 4.1 source and the FFmpeg 8.1.2, SDL 3.4.12, libusb 1.0.30, dav1d
@@ -398,6 +419,8 @@ packaging/SCRCPY_REBUILD.md for upstream build scripts and relinking guidance.
 
 The separate FFmpeg 9.0.1 command is built without GPL, nonfree, network, or
 external codec components. Its configure flags are in packaging/toolchain.lock.json.
+The Windows build applies the included configure-only patch so FFmpeg uses native
+Windows timing fallbacks and does not require the external libwinpthread runtime.
 go-ios is built with CGO disabled and the published Mobius patch. The first-party
 Mobius SSH/SFTP helper is also built with CGO disabled from the source included in
 this archive. Its locked x/crypto/ssh and pkg/sftp dependency sources, licenses,

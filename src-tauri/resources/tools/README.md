@@ -17,7 +17,9 @@ Each supported target contains:
   byte-for-byte against the exact target Android Platform Tools 37.0.0 archive.
 - AAPT2 9.4.0-15978811 from the official Google Maven artifact, including its complete `NOTICE`.
 - FFmpeg 9.0.1, built from the locked upstream source as a minimal LGPL-2.1-or-later command. GPL,
-  nonfree, network, and external codec components are not enabled.
+  nonfree, network, and external codec components are not enabled. The Windows build applies the
+  published native-timing patch, locks its compiler version, and rejects external MinGW runtime
+  DLL imports; its effective configuration, compiler identity, patch, and import list are retained.
 - go-ios 1.3.2-mobius.1, built from the locked go-ios 1.3.2 source with the published Mobius patch.
   The patch records the exact version and changes host forwarding and optional screenshot-server
   listeners from all interfaces to `127.0.0.1`. It is built with Go 1.26.5 and ships the Go runtime

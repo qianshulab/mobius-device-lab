@@ -37,7 +37,7 @@ git push origin v0.2.0
 - Linux x64：AppImage 和 Debian `deb`
 - macOS Apple Silicon：arm64 DMG
 - macOS Intel：x86_64 DMG
-- `Mobius-Device-Lab_<version>_third-party-sources.tar.xz`：固定 scrcpy 及便携依赖、FFmpeg、go-ios/Go、Mobius SSH 模块上游源码、第一方 helper 源码/测试、Mobius 补丁、工具锁与完整构建/验证脚本
+- `Mobius-Device-Lab_<version>_third-party-sources.tar.xz`：固定 scrcpy 及便携依赖、FFmpeg、go-ios/Go、Mobius SSH 模块上游源码、第一方 helper 源码/测试、公开补丁、工具锁与完整构建/验证脚本
 - `SHA256SUMS.txt`：本次所有原生包与第三方源码归档的 SHA-256
 
 ## 随包工具生成与合规
@@ -49,7 +49,7 @@ git push origin v0.2.0
 | ADB | 37.0.0，scrcpy 4.1 官方便携发行包 | 与 Google Platform Tools 37.0.0 目标归档逐字节比对，带对应 `NOTICE`；Windows 保留匹配 DLL |
 | scrcpy / Server | 4.1，Genymobile 官方便携发行包 | 客户端与 `scrcpy-server` 必须来自同一归档 |
 | scrcpy 便携依赖 | FFmpeg 8.1.2、SDL 3.4.12、libusb 1.0.30、dav1d 1.5.3、目标对应 zlib；Windows 另含 MinGW-w64 11.0.1 runtime | 保留完整源码、原始许可/第三方声明、链接方式和 LGPL 重链指南 |
-| FFmpeg | 9.0.1，FFmpeg 官方源码 | 原生 runner 最小 LGPL 构建；禁用 GPL、nonfree、网络与外部编解码器 |
+| FFmpeg | 9.0.1，FFmpeg 官方源码 | 原生 runner 最小 LGPL 构建；禁用 GPL、nonfree、网络与外部编解码器；Windows 应用公开原生计时补丁并锁定编译器/审计 DLL 导入 |
 | AAPT2 | 9.4.0-15978811，Google Maven | 提取原生二进制与完整 `NOTICE` |
 | go-ios | 1.3.2-mobius.1，go-ios 1.3.2 固定源码 | 用 Go 1.26.5、CGO 关闭的原生构建；应用公开补丁以标识版本并将转发/可选截图监听绑定 `127.0.0.1` |
 | Mobius SSH/SFTP | 0.2.0，仓库内第一方源码 | 用 Go 1.26.5、CGO 关闭构建；锁定 x/crypto/ssh、pkg/sftp 及实际链接模块，四平台随包作为 `ssh`/`scp` |
